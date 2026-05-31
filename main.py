@@ -15,7 +15,7 @@ LOW_RES_HEIGHT = 180
 
 FOV = math.radians(70)
 HORIZON = LOW_RES_HEIGHT // 2 - 8
-VIEW_DISTANCE = 115
+VIEW_DISTANCE = 85
 CAMERA_HEIGHT = 10.0
 TURN_STEP_RADIANS = math.radians(1.0)
 TURN_STEP_INTERVAL = 1.0 / 16.0
@@ -138,6 +138,7 @@ class Game:
         self.trees = []
         self.action_message = ""
         self.action_message_timer = 0.0
+        self.crafting_open = False
 
         self.terrain = SeededTerrain(self.generate_seed())
         self.player_ground_height = self.terrain.height(self.player_x, self.player_z)
@@ -179,6 +180,7 @@ class Game:
         self.inventory_slots = [None] * 8
         self.action_message = ""
         self.action_message_timer = 0.0
+        self.crafting_open = False
 
         self.mode = "play"
 
@@ -197,6 +199,24 @@ class Game:
 
     def handle_play_event(self, event: pygame.event.Event):
         if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_r:
+                self.crafting_open = not self.crafting_open
+                if self.crafting_open:
+                    self.action_message = "Crafting open: Press Enter to craft 2 planks from 1 log"
+                else:
+                    self.action_message = "Crafting closed"
+                self.action_message_timer = 1.4
+                return
+
+            if self.crafting_open:
+                if event.key == pygame.K_ESCAPE:
+                    self.crafting_open = False
+                    self.action_message = "Crafting closed"
+                    self.action_message_timer = 1.0
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_c):
+                    self.craft_planks()
+                return
+
             if pygame.K_1 <= event.key <= pygame.K_8:
                 self.active_slot = event.key - pygame.K_1
             elif event.key == pygame.K_SPACE and self.is_grounded:
@@ -212,6 +232,11 @@ class Game:
         return pygame.Rect(w // 2 - 170, h // 2 + 74, 340, 56)
 
     def update_player(self, dt: float):
+        if self.crafting_open:
+            if self.action_message_timer > 0.0:
+                self.action_message_timer = max(0.0, self.action_message_timer - dt)
+            return
+
         keys = pygame.key.get_pressed()
 
         if keys[pygame.K_a]:
@@ -271,12 +296,18 @@ class Game:
         sprites = {
             "wood": self.create_wood_sprite(sprite_size),
             "sapling": self.create_wood_sprite(sprite_size),
+            "planks": self.create_wood_sprite(sprite_size),
         }
 
         sapling_path = os.path.join("sprites", "sappling1.png")
         if os.path.exists(sapling_path):
             sapling = pygame.image.load(sapling_path).convert_alpha()
             sprites["sapling"] = pygame.transform.smoothscale(sapling, (sprite_size, sprite_size))
+
+        planks_path = os.path.join("sprites", "planks1.png")
+        if os.path.exists(planks_path):
+            planks = pygame.image.load(planks_path).convert_alpha()
+            sprites["planks"] = pygame.transform.smoothscale(planks, (sprite_size, sprite_size))
 
         return sprites
 
@@ -313,6 +344,47 @@ class Game:
             if slot is not None and slot["item"] == item_name:
                 total += slot["count"]
         return total
+
+    def remove_item_from_inventory(self, item_name: str, amount: int) -> int:
+        remaining = amount
+        for i in range(len(self.inventory_slots) - 1, -1, -1):
+            slot = self.inventory_slots[i]
+            if slot is None or slot["item"] != item_name:
+                continue
+
+            take = min(slot["count"], remaining)
+            slot["count"] -= take
+            remaining -= take
+
+            if slot["count"] == 0:
+                self.inventory_slots[i] = None
+
+            if remaining == 0:
+                return amount
+
+        return amount - remaining
+
+    def craft_planks(self):
+        if self.count_item("wood") < 1:
+            self.action_message = "Need at least 1 log to craft planks"
+            self.action_message_timer = 1.4
+            return
+
+        removed = self.remove_item_from_inventory("wood", 1)
+        if removed < 1:
+            self.action_message = "Craft failed"
+            self.action_message_timer = 1.2
+            return
+
+        added = self.add_item_to_inventory("planks", 2)
+        if added < 2:
+            self.add_item_to_inventory("wood", 1)
+            self.action_message = "No inventory space for planks"
+            self.action_message_timer = 1.4
+            return
+
+        self.action_message = "Crafted 2 planks from 1 log"
+        self.action_message_timer = 1.4
 
     def camera_world_height(self) -> float:
         return self.player_ground_height + CAMERA_HEIGHT + self.jump_offset
@@ -580,6 +652,61 @@ class Game:
             err = self.font_small.render(self.seed_error, True, (238, 116, 116))
             self.screen.blit(err, (w // 2 - err.get_width() // 2, input_rect.bottom + 10))
 
+    def draw_crafting_overlay(self):
+        w, h = self.screen.get_size()
+        panel_w, panel_h = 410, 330
+        panel_rect = pygame.Rect(w // 2 - panel_w // 2, h // 2 - panel_h // 2, panel_w, panel_h)
+
+        dim = pygame.Surface((w, h), pygame.SRCALPHA)
+        dim.fill((0, 0, 0, 110))
+        self.screen.blit(dim, (0, 0))
+
+        pygame.draw.rect(self.screen, (17, 24, 34), panel_rect, border_radius=10)
+        pygame.draw.rect(self.screen, (146, 160, 179), panel_rect, width=2, border_radius=10)
+
+        title = self.font_ui.render("Crafting Grid (3x3)", True, (232, 236, 242))
+        self.screen.blit(title, (panel_rect.x + 16, panel_rect.y + 14))
+
+        slot_size = 64
+        gap = 9
+        grid_w = slot_size * 3 + gap * 2
+        grid_x = panel_rect.centerx - grid_w // 2
+        grid_y = panel_rect.y + 52
+
+        for row in range(3):
+            for col in range(3):
+                r = pygame.Rect(grid_x + col * (slot_size + gap), grid_y + row * (slot_size + gap), slot_size, slot_size)
+                pygame.draw.rect(self.screen, (30, 40, 54), r, border_radius=7)
+                pygame.draw.rect(self.screen, (118, 131, 149), r, width=2, border_radius=7)
+
+        recipe_text = self.font_small.render("Recipe: 1 Log -> 2 Planks", True, (230, 234, 240))
+        self.screen.blit(recipe_text, (panel_rect.x + 16, panel_rect.y + 262))
+
+        hint_text = self.font_small.render("Press Enter/C to craft, R or Esc to close", True, (199, 209, 223))
+        self.screen.blit(hint_text, (panel_rect.x + 16, panel_rect.y + 286))
+
+        center_slot = pygame.Rect(grid_x + slot_size + gap, grid_y + slot_size + gap, slot_size, slot_size)
+        if self.count_item("wood") > 0:
+            wood_sprite = self.item_sprites.get("wood")
+            if wood_sprite is not None:
+                self.screen.blit(wood_sprite, (center_slot.x + 17, center_slot.y + 17))
+
+        result_rect = pygame.Rect(panel_rect.right - 96, panel_rect.y + 146, 72, 72)
+        pygame.draw.rect(self.screen, (35, 47, 61), result_rect, border_radius=7)
+        pygame.draw.rect(self.screen, (138, 150, 167), result_rect, width=2, border_radius=7)
+        planks_sprite = self.item_sprites.get("planks")
+        if planks_sprite is not None:
+            self.screen.blit(planks_sprite, (result_rect.x + 21, result_rect.y + 21))
+
+        arrow_start = (center_slot.right + 8, center_slot.centery)
+        arrow_end = (result_rect.x - 8, result_rect.centery)
+        pygame.draw.line(self.screen, (211, 219, 228), arrow_start, arrow_end, 3)
+        pygame.draw.polygon(
+            self.screen,
+            (211, 219, 228),
+            [(arrow_end[0], arrow_end[1]), (arrow_end[0] - 10, arrow_end[1] - 6), (arrow_end[0] - 10, arrow_end[1] + 6)],
+        )
+
     def draw_play_mode(self):
         self.draw_terrain()
         self.draw_trees()
@@ -595,15 +722,19 @@ class Game:
 
         total_logs = self.count_item("wood")
         total_saplings = self.count_item("sapling")
+        total_planks = self.count_item("planks")
         loot_display = self.font_small.render(
-            f"Logs: {total_logs}  Saplings: {total_saplings}",
+            f"Logs: {total_logs}  Saplings: {total_saplings}  Planks: {total_planks}",
             True,
             (236, 240, 246),
         )
         self.screen.blit(loot_display, (14, 34))
 
-        punch_hint = self.font_small.render("Punch: Left Click or F", True, (236, 240, 246))
+        punch_hint = self.font_small.render("Punch: Left Click/F  Craft: R", True, (236, 240, 246))
         self.screen.blit(punch_hint, (14, 56))
+
+        if self.crafting_open:
+            self.draw_crafting_overlay()
 
         if self.action_message_timer > 0.0:
             msg = self.font_small.render(self.action_message, True, (249, 227, 128))
