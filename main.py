@@ -135,6 +135,8 @@ class Game:
         self.inventory_slots = [None] * 8
         self.armor_slots = [None] * 4
         self.item_sprites = self.load_item_sprites()
+        self.tree_sprite = self.load_tree_sprite()
+        self.tree_sprite_scale_cache = {}
         self.trees = []
         self.action_message = ""
         self.action_message_timer = 0.0
@@ -345,6 +347,35 @@ class Game:
                 break
 
         return sprites
+
+    def load_tree_sprite(self) -> pygame.Surface:
+        sprite = pygame.Surface((64, 96), pygame.SRCALPHA)
+        pygame.draw.rect(sprite, (98, 63, 42), (28, 50, 8, 42), border_radius=2)
+        pygame.draw.circle(sprite, (56, 131, 54), (32, 42), 24)
+        pygame.draw.circle(sprite, (66, 150, 61), (24, 34), 14)
+        pygame.draw.circle(sprite, (66, 150, 61), (40, 34), 14)
+
+        tree_paths = [
+            os.path.join("sprites", "tree1.png"),
+            os.path.join("sprties", "tree1.png"),
+        ]
+        for tree_path in tree_paths:
+            if os.path.exists(tree_path):
+                sprite = pygame.image.load(tree_path).convert_alpha()
+                break
+
+        return sprite
+
+    def get_scaled_tree_sprite(self, target_height: int) -> pygame.Surface:
+        h = max(8, target_height)
+        if h in self.tree_sprite_scale_cache:
+            return self.tree_sprite_scale_cache[h]
+
+        base_w, base_h = self.tree_sprite.get_size()
+        scaled_w = max(4, int(base_w * (h / max(1, base_h))))
+        scaled = pygame.transform.smoothscale(self.tree_sprite, (scaled_w, h))
+        self.tree_sprite_scale_cache[h] = scaled
+        return scaled
 
     def add_item_to_inventory(self, item_name: str, amount: int) -> int:
         remaining = amount
@@ -650,26 +681,16 @@ class Game:
                 continue
 
             ground_h = self.terrain.height(tree["x"], tree["z"])
-            trunk_top_h = ground_h + tree["trunk"]
-            crown_top_h = trunk_top_h + tree["crown"]
-
             trunk_bottom_y = HORIZON - int((ground_h - current_camera_height) * 85.0 / distance)
-            trunk_top_y = HORIZON - int((trunk_top_h - current_camera_height) * 85.0 / distance)
-            crown_top_y = HORIZON - int((crown_top_h - current_camera_height) * 85.0 / distance)
+            tree_top_h = ground_h + tree["trunk"] + tree["crown"]
+            tree_top_y = HORIZON - int((tree_top_h - current_camera_height) * 85.0 / distance)
 
-            trunk_bottom_y = max(0, min(LOW_RES_HEIGHT - 1, trunk_bottom_y))
-            trunk_top_y = max(0, min(LOW_RES_HEIGHT - 1, trunk_top_y))
-            crown_top_y = max(0, min(LOW_RES_HEIGHT - 1, crown_top_y))
+            sprite_h = max(8, trunk_bottom_y - tree_top_y)
+            tree_sprite = self.get_scaled_tree_sprite(sprite_h)
+            sprite_x = sx - tree_sprite.get_width() // 2
+            sprite_y = trunk_bottom_y - tree_sprite.get_height()
 
-            trunk_half_width = max(1, int(9.0 / distance))
-            for x in range(sx - trunk_half_width, sx + trunk_half_width + 1):
-                if 0 <= x < LOW_RES_WIDTH and trunk_top_y < trunk_bottom_y:
-                    pygame.draw.line(self.world_surface, (98, 63, 42), (x, trunk_top_y), (x, trunk_bottom_y))
-
-            crown_radius = max(2, int(18.0 / distance))
-            crown_center_y = min(LOW_RES_HEIGHT - 1, trunk_top_y)
-            pygame.draw.circle(self.world_surface, (56, 131, 54), (sx, crown_center_y), crown_radius)
-            pygame.draw.circle(self.world_surface, (66, 150, 61), (sx, max(0, crown_top_y)), max(1, crown_radius - 1))
+            self.world_surface.blit(tree_sprite, (sprite_x, sprite_y))
 
     def draw_crosshair(self):
         w, h = self.screen.get_size()
