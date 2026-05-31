@@ -24,7 +24,7 @@ JUMP_VELOCITY = 12.5
 GRAVITY = 30.0
 TREE_COUNT = 120
 TREE_AREA_RADIUS = 220.0
-MAX_STACK_SIZE = 16
+MAX_STACK_SIZE = 32
 
 SKY_TOP = (110, 156, 209)
 SKY_BOTTOM = (181, 214, 238)
@@ -202,7 +202,7 @@ class Game:
             if event.key == pygame.K_r:
                 self.crafting_open = not self.crafting_open
                 if self.crafting_open:
-                    self.action_message = "Crafting open: Enter/C for planks, V for sticks"
+                    self.action_message = "Crafting open: Enter/C planks, V sticks, X wooden axe"
                 else:
                     self.action_message = "Crafting closed"
                 self.action_message_timer = 1.4
@@ -217,6 +217,8 @@ class Game:
                     self.craft_planks()
                 elif event.key == pygame.K_v:
                     self.craft_sticks()
+                elif event.key == pygame.K_x:
+                    self.craft_wooden_axe()
                 return
 
             if pygame.K_1 <= event.key <= pygame.K_8:
@@ -293,6 +295,14 @@ class Game:
         pygame.draw.line(sprite, (88, 52, 31), (8, 13), (size - 8, 13), 2)
         return sprite
 
+    @staticmethod
+    def create_axe_sprite(size: int) -> pygame.Surface:
+        sprite = pygame.Surface((size, size), pygame.SRCALPHA)
+        pygame.draw.rect(sprite, (125, 87, 60), (13, 7, 5, size - 10), border_radius=2)
+        pygame.draw.polygon(sprite, (174, 182, 198), [(18, 8), (28, 6), (28, 17), (18, 18)])
+        pygame.draw.polygon(sprite, (152, 160, 176), [(18, 12), (10, 8), (9, 18), (18, 20)])
+        return sprite
+
     def load_item_sprites(self) -> dict[str, pygame.Surface]:
         sprite_size = 30
         sprites = {
@@ -300,6 +310,7 @@ class Game:
             "sapling": self.create_wood_sprite(sprite_size),
             "planks": self.create_wood_sprite(sprite_size),
             "sticks": self.create_wood_sprite(sprite_size),
+            "wooden_axe": self.create_axe_sprite(sprite_size),
         }
 
         sapling_path = os.path.join("sprites", "sappling1.png")
@@ -322,18 +333,30 @@ class Game:
                 sprites["sticks"] = pygame.transform.smoothscale(stick, (sprite_size, sprite_size))
                 break
 
+        axe_paths = [
+            os.path.join("sprites", "wooden axe1.png"),
+            os.path.join("sprites", "wooden_axe1.png"),
+            os.path.join("sprties", "wooden axe1.png"),
+        ]
+        for axe_path in axe_paths:
+            if os.path.exists(axe_path):
+                axe = pygame.image.load(axe_path).convert_alpha()
+                sprites["wooden_axe"] = pygame.transform.smoothscale(axe, (sprite_size, sprite_size))
+                break
+
         return sprites
 
     def add_item_to_inventory(self, item_name: str, amount: int) -> int:
         remaining = amount
+        item_stack_limit = self.max_stack_for_item(item_name)
 
         for slot in self.inventory_slots:
             if slot is None:
                 continue
-            if slot["item"] != item_name or slot["count"] >= MAX_STACK_SIZE:
+            if slot["item"] != item_name or slot["count"] >= item_stack_limit:
                 continue
 
-            can_add = min(MAX_STACK_SIZE - slot["count"], remaining)
+            can_add = min(item_stack_limit - slot["count"], remaining)
             slot["count"] += can_add
             remaining -= can_add
             if remaining == 0:
@@ -343,7 +366,7 @@ class Game:
             if self.inventory_slots[i] is not None:
                 continue
 
-            can_add = min(MAX_STACK_SIZE, remaining)
+            can_add = min(item_stack_limit, remaining)
             self.inventory_slots[i] = {"item": item_name, "count": can_add}
             remaining -= can_add
             if remaining == 0:
@@ -351,12 +374,22 @@ class Game:
 
         return amount - remaining
 
+    @staticmethod
+    def max_stack_for_item(item_name: str) -> int:
+        if item_name == "wooden_axe":
+            return 1
+        return MAX_STACK_SIZE
+
     def count_item(self, item_name: str) -> int:
         total = 0
         for slot in self.inventory_slots:
             if slot is not None and slot["item"] == item_name:
                 total += slot["count"]
         return total
+
+    def has_equipped_wooden_axe(self) -> bool:
+        slot = self.inventory_slots[self.active_slot]
+        return slot is not None and slot["item"] == "wooden_axe" and slot["count"] > 0
 
     def remove_item_from_inventory(self, item_name: str, amount: int) -> int:
         remaining = amount
@@ -419,6 +452,34 @@ class Game:
             return
 
         self.action_message = "Crafted 5 sticks from 1 plank"
+        self.action_message_timer = 1.4
+
+    def craft_wooden_axe(self):
+        if self.count_item("planks") < 3 or self.count_item("sticks") < 2:
+            self.action_message = "Need 3 planks and 2 sticks to craft a wooden axe"
+            self.action_message_timer = 1.6
+            return
+
+        removed_planks = self.remove_item_from_inventory("planks", 3)
+        removed_sticks = self.remove_item_from_inventory("sticks", 2)
+        if removed_planks < 3 or removed_sticks < 2:
+            if removed_planks > 0:
+                self.add_item_to_inventory("planks", removed_planks)
+            if removed_sticks > 0:
+                self.add_item_to_inventory("sticks", removed_sticks)
+            self.action_message = "Craft failed"
+            self.action_message_timer = 1.2
+            return
+
+        added = self.add_item_to_inventory("wooden_axe", 1)
+        if added < 1:
+            self.add_item_to_inventory("planks", 3)
+            self.add_item_to_inventory("sticks", 2)
+            self.action_message = "No inventory space for wooden axe"
+            self.action_message_timer = 1.4
+            return
+
+        self.action_message = "Crafted 1 wooden axe"
         self.action_message_timer = 1.4
 
     def camera_world_height(self) -> float:
@@ -500,9 +561,10 @@ class Game:
             return
 
         best_tree["alive"] = False
-        logs = random.randint(1, 5)
-        saplings = random.randint(1, 3)
-        sticks = random.randint(2, 7)
+        bonus = 4 if self.has_equipped_wooden_axe() else 0
+        logs = random.randint(1, 5) + bonus
+        saplings = random.randint(1, 3) + bonus
+        sticks = random.randint(2, 7) + bonus
 
         added_logs = self.add_item_to_inventory("wood", logs)
         added_saplings = self.add_item_to_inventory("sapling", saplings)
@@ -512,6 +574,8 @@ class Game:
         dropped_sticks = sticks - added_sticks
 
         self.action_message = f"Collected {added_logs} logs, {added_saplings} saplings, {added_sticks} sticks"
+        if bonus > 0:
+            self.action_message += " (+4 axe bonus)"
         if dropped_logs > 0 or dropped_saplings > 0 or dropped_sticks > 0:
             self.action_message += (
                 f" ({dropped_logs} logs, {dropped_saplings} saplings, {dropped_sticks} sticks dropped)"
@@ -719,10 +783,14 @@ class Game:
                 pygame.draw.rect(self.screen, (30, 40, 54), r, border_radius=7)
                 pygame.draw.rect(self.screen, (118, 131, 149), r, width=2, border_radius=7)
 
-        recipe_text = self.font_small.render("Recipes: 1 Log -> 2 Planks | 1 Plank -> 5 Sticks", True, (230, 234, 240))
+        recipe_text = self.font_small.render(
+            "Recipes: 1 Log->2 Planks | 1 Plank->5 Sticks | 3 Planks+2 Sticks->Axe",
+            True,
+            (230, 234, 240),
+        )
         self.screen.blit(recipe_text, (panel_rect.x + 16, panel_rect.y + 262))
 
-        hint_text = self.font_small.render("Enter/C: planks, V: sticks, R/Esc: close", True, (199, 209, 223))
+        hint_text = self.font_small.render("Enter/C: planks, V: sticks, X: axe, R/Esc: close", True, (199, 209, 223))
         self.screen.blit(hint_text, (panel_rect.x + 16, panel_rect.y + 286))
 
         center_slot = pygame.Rect(grid_x + slot_size + gap, grid_y + slot_size + gap, slot_size, slot_size)
@@ -744,6 +812,13 @@ class Game:
         sticks_sprite = self.item_sprites.get("sticks")
         if sticks_sprite is not None:
             self.screen.blit(sticks_sprite, (stick_result_rect.x + 21, stick_result_rect.y + 21))
+
+        axe_result_rect = pygame.Rect(panel_rect.right - 276, panel_rect.y + 146, 72, 72)
+        pygame.draw.rect(self.screen, (35, 47, 61), axe_result_rect, border_radius=7)
+        pygame.draw.rect(self.screen, (138, 150, 167), axe_result_rect, width=2, border_radius=7)
+        axe_sprite = self.item_sprites.get("wooden_axe")
+        if axe_sprite is not None:
+            self.screen.blit(axe_sprite, (axe_result_rect.x + 21, axe_result_rect.y + 21))
 
         arrow_start = (center_slot.right + 8, center_slot.centery)
         arrow_end = (result_rect.x - 8, result_rect.centery)
@@ -771,8 +846,12 @@ class Game:
         total_saplings = self.count_item("sapling")
         total_planks = self.count_item("planks")
         total_sticks = self.count_item("sticks")
+        total_axes = self.count_item("wooden_axe")
         loot_display = self.font_small.render(
-            f"Logs: {total_logs}  Saplings: {total_saplings}  Planks: {total_planks}  Sticks: {total_sticks}",
+            (
+                f"Logs: {total_logs}  Saplings: {total_saplings}  Planks: {total_planks}  "
+                f"Sticks: {total_sticks}  Axes: {total_axes}"
+            ),
             True,
             (236, 240, 246),
         )
