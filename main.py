@@ -121,6 +121,7 @@ class Game:
         self.player_x = 0.0
         self.player_z = 0.0
         self.player_yaw = 0.0
+        self.player_ground_height = 0.0
         self.jump_offset = 0.0
         self.vertical_velocity = 0.0
         self.is_grounded = True
@@ -135,6 +136,7 @@ class Game:
         self.action_message_timer = 0.0
 
         self.terrain = SeededTerrain(self.generate_seed())
+        self.player_ground_height = self.terrain.height(self.player_x, self.player_z)
         self.generate_trees()
 
     @staticmethod
@@ -164,6 +166,7 @@ class Game:
         self.player_x = 0.0
         self.player_z = 0.0
         self.player_yaw = 0.0
+        self.player_ground_height = self.terrain.height(self.player_x, self.player_z)
         self.jump_offset = 0.0
         self.vertical_velocity = 0.0
         self.is_grounded = True
@@ -222,6 +225,7 @@ class Game:
 
         self.player_x += forward_x * move * MOVE_SPEED * dt
         self.player_z += forward_z * move * MOVE_SPEED * dt
+        self.player_ground_height = self.terrain.height(self.player_x, self.player_z)
 
         if not self.is_grounded:
             self.jump_offset += self.vertical_velocity * dt
@@ -234,6 +238,9 @@ class Game:
 
         if self.action_message_timer > 0.0:
             self.action_message_timer = max(0.0, self.action_message_timer - dt)
+
+    def camera_world_height(self) -> float:
+        return self.player_ground_height + CAMERA_HEIGHT + self.jump_offset
 
     def generate_trees(self):
         rng = random.Random(self.terrain.seed_value ^ 0x6C8E9CF5)
@@ -332,20 +339,20 @@ class Game:
 
     def draw_terrain(self):
         self.world_surface.blit(self.sky_surface, (0, 0))
+        current_camera_height = self.camera_world_height()
 
         for sx in range(LOW_RES_WIDTH):
             ray_angle = self.player_yaw + (sx / LOW_RES_WIDTH - 0.5) * FOV
             dx = math.sin(ray_angle)
             dz = math.cos(ray_angle)
 
-            max_y = LOW_RES_HEIGHT
+            max_y = LOW_RES_HEIGHT - 1
             distance = 1.0
             while distance < VIEW_DISTANCE and max_y > 0:
                 wx = self.player_x + dx * distance
                 wz = self.player_z + dz * distance
 
                 ground_h = self.terrain.height(wx, wz)
-                current_camera_height = CAMERA_HEIGHT + self.jump_offset
                 projected = HORIZON - int((ground_h - current_camera_height) * 85.0 / distance)
                 projected = max(0, min(LOW_RES_HEIGHT - 1, projected))
 
@@ -357,7 +364,7 @@ class Game:
                 distance += 1.1
 
     def draw_trees(self):
-        current_camera_height = CAMERA_HEIGHT + self.jump_offset
+        current_camera_height = self.camera_world_height()
         visible_trees = []
 
         for tree in self.trees:
