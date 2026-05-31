@@ -202,7 +202,7 @@ class Game:
             if event.key == pygame.K_r:
                 self.crafting_open = not self.crafting_open
                 if self.crafting_open:
-                    self.action_message = "Crafting open: Press Enter to craft 2 planks from 1 log"
+                    self.action_message = "Crafting open: Enter/C for planks, V for sticks"
                 else:
                     self.action_message = "Crafting closed"
                 self.action_message_timer = 1.4
@@ -215,6 +215,8 @@ class Game:
                     self.action_message_timer = 1.0
                 elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_c):
                     self.craft_planks()
+                elif event.key == pygame.K_v:
+                    self.craft_sticks()
                 return
 
             if pygame.K_1 <= event.key <= pygame.K_8:
@@ -297,6 +299,7 @@ class Game:
             "wood": self.create_wood_sprite(sprite_size),
             "sapling": self.create_wood_sprite(sprite_size),
             "planks": self.create_wood_sprite(sprite_size),
+            "sticks": self.create_wood_sprite(sprite_size),
         }
 
         sapling_path = os.path.join("sprites", "sappling1.png")
@@ -308,6 +311,16 @@ class Game:
         if os.path.exists(planks_path):
             planks = pygame.image.load(planks_path).convert_alpha()
             sprites["planks"] = pygame.transform.smoothscale(planks, (sprite_size, sprite_size))
+
+        stick_paths = [
+            os.path.join("sprites", "stick1.png"),
+            os.path.join("sprties", "stick1.png"),
+        ]
+        for stick_path in stick_paths:
+            if os.path.exists(stick_path):
+                stick = pygame.image.load(stick_path).convert_alpha()
+                sprites["sticks"] = pygame.transform.smoothscale(stick, (sprite_size, sprite_size))
+                break
 
         return sprites
 
@@ -384,6 +397,28 @@ class Game:
             return
 
         self.action_message = "Crafted 2 planks from 1 log"
+        self.action_message_timer = 1.4
+
+    def craft_sticks(self):
+        if self.count_item("planks") < 1:
+            self.action_message = "Need at least 1 plank to craft sticks"
+            self.action_message_timer = 1.4
+            return
+
+        removed = self.remove_item_from_inventory("planks", 1)
+        if removed < 1:
+            self.action_message = "Craft failed"
+            self.action_message_timer = 1.2
+            return
+
+        added = self.add_item_to_inventory("sticks", 5)
+        if added < 5:
+            self.add_item_to_inventory("planks", 1)
+            self.action_message = "No inventory space for sticks"
+            self.action_message_timer = 1.4
+            return
+
+        self.action_message = "Crafted 5 sticks from 1 plank"
         self.action_message_timer = 1.4
 
     def camera_world_height(self) -> float:
@@ -467,15 +502,20 @@ class Game:
         best_tree["alive"] = False
         logs = random.randint(1, 5)
         saplings = random.randint(1, 3)
+        sticks = random.randint(2, 7)
 
         added_logs = self.add_item_to_inventory("wood", logs)
         added_saplings = self.add_item_to_inventory("sapling", saplings)
+        added_sticks = self.add_item_to_inventory("sticks", sticks)
         dropped_logs = logs - added_logs
         dropped_saplings = saplings - added_saplings
+        dropped_sticks = sticks - added_sticks
 
-        self.action_message = f"Collected {added_logs} logs and {added_saplings} saplings"
-        if dropped_logs > 0 or dropped_saplings > 0:
-            self.action_message += f" ({dropped_logs} logs, {dropped_saplings} saplings dropped)"
+        self.action_message = f"Collected {added_logs} logs, {added_saplings} saplings, {added_sticks} sticks"
+        if dropped_logs > 0 or dropped_saplings > 0 or dropped_sticks > 0:
+            self.action_message += (
+                f" ({dropped_logs} logs, {dropped_saplings} saplings, {dropped_sticks} sticks dropped)"
+            )
         self.action_message_timer = 1.8
 
     def build_sky_surface(self) -> pygame.Surface:
@@ -679,10 +719,10 @@ class Game:
                 pygame.draw.rect(self.screen, (30, 40, 54), r, border_radius=7)
                 pygame.draw.rect(self.screen, (118, 131, 149), r, width=2, border_radius=7)
 
-        recipe_text = self.font_small.render("Recipe: 1 Log -> 2 Planks", True, (230, 234, 240))
+        recipe_text = self.font_small.render("Recipes: 1 Log -> 2 Planks | 1 Plank -> 5 Sticks", True, (230, 234, 240))
         self.screen.blit(recipe_text, (panel_rect.x + 16, panel_rect.y + 262))
 
-        hint_text = self.font_small.render("Press Enter/C to craft, R or Esc to close", True, (199, 209, 223))
+        hint_text = self.font_small.render("Enter/C: planks, V: sticks, R/Esc: close", True, (199, 209, 223))
         self.screen.blit(hint_text, (panel_rect.x + 16, panel_rect.y + 286))
 
         center_slot = pygame.Rect(grid_x + slot_size + gap, grid_y + slot_size + gap, slot_size, slot_size)
@@ -697,6 +737,13 @@ class Game:
         planks_sprite = self.item_sprites.get("planks")
         if planks_sprite is not None:
             self.screen.blit(planks_sprite, (result_rect.x + 21, result_rect.y + 21))
+
+        stick_result_rect = pygame.Rect(panel_rect.right - 186, panel_rect.y + 146, 72, 72)
+        pygame.draw.rect(self.screen, (35, 47, 61), stick_result_rect, border_radius=7)
+        pygame.draw.rect(self.screen, (138, 150, 167), stick_result_rect, width=2, border_radius=7)
+        sticks_sprite = self.item_sprites.get("sticks")
+        if sticks_sprite is not None:
+            self.screen.blit(sticks_sprite, (stick_result_rect.x + 21, stick_result_rect.y + 21))
 
         arrow_start = (center_slot.right + 8, center_slot.centery)
         arrow_end = (result_rect.x - 8, result_rect.centery)
@@ -723,8 +770,9 @@ class Game:
         total_logs = self.count_item("wood")
         total_saplings = self.count_item("sapling")
         total_planks = self.count_item("planks")
+        total_sticks = self.count_item("sticks")
         loot_display = self.font_small.render(
-            f"Logs: {total_logs}  Saplings: {total_saplings}  Planks: {total_planks}",
+            f"Logs: {total_logs}  Saplings: {total_saplings}  Planks: {total_planks}  Sticks: {total_sticks}",
             True,
             (236, 240, 246),
         )
