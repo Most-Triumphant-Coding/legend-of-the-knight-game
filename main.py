@@ -28,9 +28,13 @@ MAX_STACK_SIZE = 32
 MAX_HEALTH = 30
 DAY_DURATION_SECONDS = 60.0
 NIGHT_DURATION_SECONDS = 60.0
-SKELETON_MAX_HEALTH = 10
-SKELETON_TARGET_COUNT = 6
-SKELETON_SPAWN_INTERVAL = 2.0
+TIER1_SKELETON_MAX_HEALTH = 10
+TIER2_SKELETON_MAX_HEALTH = 10
+TIER1_SKELETON_SPAWN_INTERVAL = 5.0
+TIER2_SKELETON_SPAWN_INTERVAL = 10.0
+TIER1_SKELETON_MAX_COUNT = 10
+TIER2_SKELETON_MAX_COUNT = 6
+IRON_HELMET_DAMAGE_REDUCTION = 0.35
 
 SKY_TOP = (110, 156, 209)
 SKY_BOTTOM = (181, 214, 238)
@@ -130,6 +134,7 @@ class Game:
 
         self.seed_text = ""
         self.seed_error = ""
+        self.start_notice = ""
 
         self.player_x = 0.0
         self.player_z = 0.0
@@ -151,11 +156,12 @@ class Game:
         self.tree_sprite = self.load_tree_sprite()
         self.tree_sprite_scale_cache = {}
         self.tree_hitboxes = []
-        self.skeleton_sprite = self.load_skeleton_sprite()
+        self.skeleton_sprites = self.load_skeleton_sprites()
         self.skeleton_sprite_scale_cache = {}
         self.skeleton_hitboxes = []
         self.skeletons = []
-        self.skeleton_spawn_timer = 0.0
+        self.tier1_skeleton_spawn_timer = 0.0
+        self.tier2_skeleton_spawn_timer = 0.0
         self.trees = []
         self.action_message = ""
         self.action_message_timer = 0.0
@@ -201,11 +207,14 @@ class Game:
         self.health = self.max_health
         self.game_time_seconds = 0.0
         self.inventory_slots = [None] * 8
+        self.armor_slots = [None] * 4
         self.skeletons = []
-        self.skeleton_spawn_timer = 0.0
+        self.tier1_skeleton_spawn_timer = 0.0
+        self.tier2_skeleton_spawn_timer = 0.0
         self.action_message = ""
         self.action_message_timer = 0.0
         self.crafting_open = False
+        self.start_notice = ""
 
         self.mode = "play"
 
@@ -349,6 +358,8 @@ class Game:
             "wooden_axe": self.create_axe_sprite(sprite_size),
             "bone": self.create_wood_sprite(sprite_size),
             "iron_sword": self.create_axe_sprite(sprite_size),
+            "iron_ingot": self.create_wood_sprite(sprite_size),
+            "iron_helmet": self.create_axe_sprite(sprite_size),
         }
 
         sapling_path = os.path.join("sprites", "sappling1.png")
@@ -391,6 +402,39 @@ class Game:
             if os.path.exists(sword_path):
                 sword = pygame.image.load(sword_path).convert_alpha()
                 sprites["iron_sword"] = pygame.transform.smoothscale(sword, (sprite_size, sprite_size))
+                break
+
+        bone_paths = [
+            os.path.join("sprites", "bone1.png"),
+            os.path.join("sprties", "bone1.png"),
+        ]
+        for bone_path in bone_paths:
+            if os.path.exists(bone_path):
+                bone = pygame.image.load(bone_path).convert_alpha()
+                sprites["bone"] = pygame.transform.smoothscale(bone, (sprite_size, sprite_size))
+                break
+
+        ingot_paths = [
+            os.path.join("sprites", "iron ingot1.png"),
+            os.path.join("sprites", "iron_ingot1.png"),
+            os.path.join("sprties", "iron ingot1.png"),
+        ]
+        for ingot_path in ingot_paths:
+            if os.path.exists(ingot_path):
+                ingot = pygame.image.load(ingot_path).convert_alpha()
+                sprites["iron_ingot"] = pygame.transform.smoothscale(ingot, (sprite_size, sprite_size))
+                break
+
+        helmet_paths = [
+            os.path.join("sprites", "iron helmet1.png"),
+            os.path.join("sprites", "iron_helmet1.png"),
+            os.path.join("sprites", "iron helment1.png"),
+            os.path.join("sprties", "iron helmet1.png"),
+        ]
+        for helmet_path in helmet_paths:
+            if os.path.exists(helmet_path):
+                helmet = pygame.image.load(helmet_path).convert_alpha()
+                sprites["iron_helmet"] = pygame.transform.smoothscale(helmet, (sprite_size, sprite_size))
                 break
 
         return sprites
@@ -455,10 +499,27 @@ class Game:
         self.health = max(0, min(self.max_health, health_value))
 
     def take_damage(self, amount: int):
-        self.set_health(self.health - max(0, amount))
+        final_damage = max(0, amount)
+        if self.has_iron_helmet_equipped():
+            final_damage = max(1, math.ceil(final_damage * (1.0 - IRON_HELMET_DAMAGE_REDUCTION)))
+        self.set_health(self.health - final_damage)
+        if self.health <= 0:
+            self.handle_player_death()
 
     def heal(self, amount: int):
         self.set_health(self.health + max(0, amount))
+
+    def handle_player_death(self):
+        self.mode = "start"
+        self.start_notice = "You died. Press Start Game to respawn."
+        self.crafting_open = False
+        self.action_message = ""
+        self.action_message_timer = 0.0
+        self.skeletons = []
+        self.skeleton_hitboxes = []
+        self.health = self.max_health
+        self.tier1_skeleton_spawn_timer = 0.0
+        self.tier2_skeleton_spawn_timer = 0.0
 
     def draw_health_hud(self):
         heart_size = self.full_heart_sprite.get_width()
@@ -523,7 +584,7 @@ class Game:
 
     @staticmethod
     def max_stack_for_item(item_name: str) -> int:
-        if item_name in ("wooden_axe", "iron_sword"):
+        if item_name in ("wooden_axe", "iron_sword", "iron_helmet"):
             return 1
         return MAX_STACK_SIZE
 
@@ -547,6 +608,21 @@ class Game:
         if slot["item"] == "iron_sword":
             return 7
         return 1
+
+    def has_iron_helmet_equipped(self) -> bool:
+        for armor_slot in self.armor_slots:
+            if armor_slot is not None and armor_slot.get("item") == "iron_helmet":
+                return True
+        return False
+
+    def auto_equip_iron_helmet(self):
+        if self.has_iron_helmet_equipped():
+            return
+
+        if self.armor_slots[0] is None and self.count_item("iron_helmet") > 0:
+            removed = self.remove_item_from_inventory("iron_helmet", 1)
+            if removed >= 1:
+                self.armor_slots[0] = {"item": "iron_helmet", "count": 1}
 
     def remove_item_from_inventory(self, item_name: str, amount: int) -> int:
         remaining = amount
@@ -639,76 +715,123 @@ class Game:
         self.action_message = "Crafted 1 wooden axe"
         self.action_message_timer = 1.4
 
-    def load_skeleton_sprite(self) -> pygame.Surface:
-        sprite = pygame.Surface((48, 72), pygame.SRCALPHA)
-        pygame.draw.rect(sprite, (205, 210, 220), (17, 14, 14, 36), border_radius=3)
-        pygame.draw.circle(sprite, (225, 228, 236), (24, 10), 9)
-        pygame.draw.rect(sprite, (190, 194, 203), (12, 50, 8, 18), border_radius=2)
-        pygame.draw.rect(sprite, (190, 194, 203), (28, 50, 8, 18), border_radius=2)
+    def load_skeleton_sprites(self) -> dict[int, pygame.Surface]:
+        tier1 = pygame.Surface((48, 72), pygame.SRCALPHA)
+        pygame.draw.rect(tier1, (205, 210, 220), (17, 14, 14, 36), border_radius=3)
+        pygame.draw.circle(tier1, (225, 228, 236), (24, 10), 9)
+        pygame.draw.rect(tier1, (190, 194, 203), (12, 50, 8, 18), border_radius=2)
+        pygame.draw.rect(tier1, (190, 194, 203), (28, 50, 8, 18), border_radius=2)
 
-        skeleton_paths = [
+        tier2 = pygame.Surface((48, 72), pygame.SRCALPHA)
+        pygame.draw.rect(tier2, (172, 182, 201), (16, 14, 16, 38), border_radius=3)
+        pygame.draw.circle(tier2, (205, 216, 236), (24, 10), 9)
+        pygame.draw.rect(tier2, (150, 163, 188), (11, 52, 8, 18), border_radius=2)
+        pygame.draw.rect(tier2, (150, 163, 188), (29, 52, 8, 18), border_radius=2)
+
+        tier1_paths = [
             os.path.join("sprites", "skeleton1.png"),
             os.path.join("sprties", "skeleton1.png"),
         ]
-        for skeleton_path in skeleton_paths:
-            if os.path.exists(skeleton_path):
-                sprite = pygame.image.load(skeleton_path).convert_alpha()
+        for p in tier1_paths:
+            if os.path.exists(p):
+                tier1 = pygame.image.load(p).convert_alpha()
                 break
 
-        return sprite
+        tier2_paths = [
+            os.path.join("sprites", "skeleton2.png"),
+            os.path.join("sprties", "skeleton2.png"),
+        ]
+        for p in tier2_paths:
+            if os.path.exists(p):
+                tier2 = pygame.image.load(p).convert_alpha()
+                break
 
-    def get_scaled_skeleton_sprite(self, target_height: int) -> pygame.Surface:
+        return {1: tier1, 2: tier2}
+
+    def get_scaled_skeleton_sprite(self, tier: int, target_height: int) -> pygame.Surface:
         h = max(8, target_height)
-        if h in self.skeleton_sprite_scale_cache:
-            return self.skeleton_sprite_scale_cache[h]
+        key = (tier, h)
+        if key in self.skeleton_sprite_scale_cache:
+            return self.skeleton_sprite_scale_cache[key]
 
-        base_w, base_h = self.skeleton_sprite.get_size()
+        base_sprite = self.skeleton_sprites.get(tier, self.skeleton_sprites[1])
+        base_w, base_h = base_sprite.get_size()
         scaled_w = max(4, int(base_w * (h / max(1, base_h))))
-        scaled = pygame.transform.smoothscale(self.skeleton_sprite, (scaled_w, h))
-        self.skeleton_sprite_scale_cache[h] = scaled
+        scaled = pygame.transform.smoothscale(base_sprite, (scaled_w, h))
+        self.skeleton_sprite_scale_cache[key] = scaled
         return scaled
 
-    def spawn_skeleton_near_player(self):
+    def spawn_skeleton_near_player(self, tier: int):
         angle = random.uniform(0.0, math.tau)
         dist = random.uniform(20.0, 45.0)
         sx = self.player_x + math.sin(angle) * dist
         sz = self.player_z + math.cos(angle) * dist
-        self.skeletons.append({"x": sx, "z": sz, "hp": SKELETON_MAX_HEALTH, "attack_cd": 0.0})
+        max_hp = TIER1_SKELETON_MAX_HEALTH if tier == 1 else TIER2_SKELETON_MAX_HEALTH
+        self.skeletons.append({"x": sx, "z": sz, "hp": max_hp, "attack_cd": 0.0, "tier": tier})
 
     def kill_skeleton(self, skeleton: dict):
         if skeleton in self.skeletons:
             self.skeletons.remove(skeleton)
 
+        tier = skeleton.get("tier", 1)
         bones = random.randint(1, 5)
         added_bones = self.add_item_to_inventory("bone", bones)
         dropped_bones = bones - added_bones
 
-        got_sword = random.random() < 0.25
-        added_sword = 0
-        if got_sword:
-            added_sword = self.add_item_to_inventory("iron_sword", 1)
+        dropped_parts = []
+        self.action_message = f"Skeleton tier {tier} defeated: +{added_bones} bone"
 
-        self.action_message = f"Skeleton defeated: +{added_bones} bone"
-        if got_sword:
-            if added_sword > 0:
-                self.action_message += " and +1 iron sword"
-            else:
-                self.action_message += " (iron sword dropped due to full inventory)"
+        if tier == 1:
+            got_sword = random.random() < 0.25
+            added_sword = 0
+            if got_sword:
+                added_sword = self.add_item_to_inventory("iron_sword", 1)
+            if got_sword:
+                if added_sword > 0:
+                    self.action_message += " and +1 iron sword"
+                else:
+                    dropped_parts.append("1 iron sword")
+        else:
+            ingots = random.randint(0, 4)
+            added_ingots = self.add_item_to_inventory("iron_ingot", ingots)
+            dropped_ingots = ingots - added_ingots
+            self.action_message += f", +{added_ingots} iron ingot"
+            if dropped_ingots > 0:
+                dropped_parts.append(f"{dropped_ingots} iron ingot")
+
+            got_helmet = random.random() < 0.10
+            if got_helmet:
+                added_helmet = self.add_item_to_inventory("iron_helmet", 1)
+                if added_helmet > 0:
+                    self.auto_equip_iron_helmet()
+                    self.action_message += " and +1 iron helmet"
+                else:
+                    dropped_parts.append("1 iron helmet")
+
         if dropped_bones > 0:
-            self.action_message += f" ({dropped_bones} bone dropped)"
+            dropped_parts.append(f"{dropped_bones} bone")
+        if dropped_parts:
+            self.action_message += " (dropped: " + ", ".join(dropped_parts) + ")"
         self.action_message_timer = 1.8
 
     def update_skeletons(self, dt: float):
         if self.is_daytime():
             self.skeletons.clear()
             self.skeleton_hitboxes = []
-            self.skeleton_spawn_timer = 0.0
+            self.tier1_skeleton_spawn_timer = 0.0
+            self.tier2_skeleton_spawn_timer = 0.0
             return
 
-        self.skeleton_spawn_timer += dt
-        while len(self.skeletons) < SKELETON_TARGET_COUNT and self.skeleton_spawn_timer >= SKELETON_SPAWN_INTERVAL:
-            self.spawn_skeleton_near_player()
-            self.skeleton_spawn_timer -= SKELETON_SPAWN_INTERVAL
+        self.tier1_skeleton_spawn_timer += dt
+        self.tier2_skeleton_spawn_timer += dt
+
+        while self.tier1_skeleton_spawn_timer >= TIER1_SKELETON_SPAWN_INTERVAL:
+            self.spawn_skeleton_near_player(1)
+            self.tier1_skeleton_spawn_timer -= TIER1_SKELETON_SPAWN_INTERVAL
+
+        while self.tier2_skeleton_spawn_timer >= TIER2_SKELETON_SPAWN_INTERVAL:
+            self.spawn_skeleton_near_player(2)
+            self.tier2_skeleton_spawn_timer -= TIER2_SKELETON_SPAWN_INTERVAL
 
         for skeleton in self.skeletons:
             if skeleton["attack_cd"] > 0.0:
@@ -724,9 +847,12 @@ class Game:
                 skeleton["z"] += (dz / max(0.001, dist)) * speed * dt
             else:
                 if skeleton["attack_cd"] <= 0.0:
-                    self.take_damage(5)
+                    damage = 3 if skeleton.get("tier", 1) == 2 else 1
+                    self.take_damage(damage)
+                    if self.mode != "play":
+                        return
                     skeleton["attack_cd"] = 1.0
-                    self.action_message = "Skeleton hit you for 5 damage"
+                    self.action_message = f"Skeleton tier {skeleton.get('tier', 1)} hit you for {damage} damage"
                     self.action_message_timer = 1.0
 
     def player_attack_skeleton(self, mouse_pos: tuple[int, int] | None = None) -> bool:
@@ -1043,11 +1169,11 @@ class Game:
 
             ground_h = self.terrain.height(skeleton["x"], skeleton["z"])
             feet_y = HORIZON - int((ground_h - current_camera_height) * 85.0 / distance)
-            top_h = ground_h + 14.0
+            top_h = ground_h + (16.0 if skeleton.get("tier", 1) == 2 else 14.0)
             top_y = HORIZON - int((top_h - current_camera_height) * 85.0 / distance)
 
             sprite_h = max(8, feet_y - top_y)
-            skeleton_sprite = self.get_scaled_skeleton_sprite(sprite_h)
+            skeleton_sprite = self.get_scaled_skeleton_sprite(skeleton.get("tier", 1), sprite_h)
             sprite_x = sx - skeleton_sprite.get_width() // 2
             sprite_y = feet_y - skeleton_sprite.get_height()
 
@@ -1140,6 +1266,10 @@ class Game:
 
         enter_hint = self.font_small.render("Press Enter or click Start Game", True, (180, 190, 205))
         self.screen.blit(enter_hint, (w // 2 - enter_hint.get_width() // 2, button_rect.bottom + 16))
+
+        if self.start_notice:
+            notice = self.font_small.render(self.start_notice, True, (240, 194, 116))
+            self.screen.blit(notice, (w // 2 - notice.get_width() // 2, button_rect.bottom + 40))
 
         if self.seed_error:
             err = self.font_small.render(self.seed_error, True, (238, 116, 116))
@@ -1251,11 +1381,14 @@ class Game:
         total_sticks = self.count_item("sticks")
         total_axes = self.count_item("wooden_axe")
         total_bones = self.count_item("bone")
+        total_ingots = self.count_item("iron_ingot")
         total_swords = self.count_item("iron_sword")
+        total_helmets = self.count_item("iron_helmet") + (1 if self.has_iron_helmet_equipped() else 0)
         loot_display = self.font_small.render(
             (
                 f"Logs: {total_logs}  Saplings: {total_saplings}  Planks: {total_planks}  "
-                f"Sticks: {total_sticks}  Axes: {total_axes}  Bones: {total_bones}  Iron Swords: {total_swords}"
+                f"Sticks: {total_sticks}  Axes: {total_axes}  Bones: {total_bones}  Ingots: {total_ingots}  "
+                f"Iron Swords: {total_swords}  Helmets: {total_helmets}"
             ),
             True,
             (236, 240, 246),
