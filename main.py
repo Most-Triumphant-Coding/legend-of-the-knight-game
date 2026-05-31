@@ -35,6 +35,9 @@ TIER2_SKELETON_SPAWN_INTERVAL = 10.0
 TIER1_SKELETON_MAX_COUNT = 10
 TIER2_SKELETON_MAX_COUNT = 6
 IRON_HELMET_DAMAGE_REDUCTION = 0.35
+SHEEP_SPAWN_INTERVAL = 1.0
+SHEEP_MAX_COUNT = 28
+SHEEP_MAX_HEALTH = 3
 
 SKY_TOP = (110, 156, 209)
 SKY_BOTTOM = (181, 214, 238)
@@ -160,6 +163,11 @@ class Game:
         self.skeleton_sprite_scale_cache = {}
         self.skeleton_hitboxes = []
         self.skeletons = []
+        self.sheep_sprite = self.load_sheep_sprite()
+        self.sheep_sprite_scale_cache = {}
+        self.sheep_hitboxes = []
+        self.sheep = []
+        self.sheep_spawn_timer = 0.0
         self.tier1_skeleton_spawn_timer = 0.0
         self.tier2_skeleton_spawn_timer = 0.0
         self.trees = []
@@ -209,6 +217,8 @@ class Game:
         self.inventory_slots = [None] * 8
         self.armor_slots = [None] * 4
         self.skeletons = []
+        self.sheep = []
+        self.sheep_spawn_timer = 0.0
         self.tier1_skeleton_spawn_timer = 0.0
         self.tier2_skeleton_spawn_timer = 0.0
         self.action_message = ""
@@ -239,7 +249,7 @@ class Game:
             if event.key == pygame.K_r:
                 self.crafting_open = not self.crafting_open
                 if self.crafting_open:
-                    self.action_message = "Crafting open: Enter/C planks, V sticks, X wooden axe"
+                    self.action_message = "Crafting open: Enter/C planks, V sticks, X wooden axe, B bed"
                 else:
                     self.action_message = "Crafting closed"
                 self.action_message_timer = 1.4
@@ -256,6 +266,8 @@ class Game:
                     self.craft_sticks()
                 elif event.key == pygame.K_x:
                     self.craft_wooden_axe()
+                elif event.key == pygame.K_b:
+                    self.craft_bed()
                 return
 
             if pygame.K_1 <= event.key <= pygame.K_8:
@@ -263,6 +275,8 @@ class Game:
             elif event.key == pygame.K_SPACE and self.is_grounded:
                 self.vertical_velocity = JUMP_VELOCITY
                 self.is_grounded = False
+            elif event.key == pygame.K_q:
+                self.consume_meat_from_active_slot()
             elif event.key == pygame.K_f:
                 if not self.player_attack_skeleton():
                     self.punch_tree()
@@ -280,6 +294,7 @@ class Game:
     def update_player(self, dt: float):
         self.game_time_seconds += dt
         self.update_skeletons(dt)
+        self.update_sheep(dt)
 
         if self.crafting_open:
             if self.action_message_timer > 0.0:
@@ -360,6 +375,9 @@ class Game:
             "iron_sword": self.create_axe_sprite(sprite_size),
             "iron_ingot": self.create_wood_sprite(sprite_size),
             "iron_helmet": self.create_axe_sprite(sprite_size),
+            "meat": self.create_wood_sprite(sprite_size),
+            "wool": self.create_wood_sprite(sprite_size),
+            "bed": self.create_wood_sprite(sprite_size),
         }
 
         sapling_path = os.path.join("sprites", "sappling1.png")
@@ -435,6 +453,36 @@ class Game:
             if os.path.exists(helmet_path):
                 helmet = pygame.image.load(helmet_path).convert_alpha()
                 sprites["iron_helmet"] = pygame.transform.smoothscale(helmet, (sprite_size, sprite_size))
+                break
+
+        meat_paths = [
+            os.path.join("sprites", "meat1.png"),
+            os.path.join("sprties", "meat1.png"),
+        ]
+        for meat_path in meat_paths:
+            if os.path.exists(meat_path):
+                meat = pygame.image.load(meat_path).convert_alpha()
+                sprites["meat"] = pygame.transform.smoothscale(meat, (sprite_size, sprite_size))
+                break
+
+        wool_paths = [
+            os.path.join("sprites", "wool1.png"),
+            os.path.join("sprties", "wool1.png"),
+        ]
+        for wool_path in wool_paths:
+            if os.path.exists(wool_path):
+                wool = pygame.image.load(wool_path).convert_alpha()
+                sprites["wool"] = pygame.transform.smoothscale(wool, (sprite_size, sprite_size))
+                break
+
+        bed_paths = [
+            os.path.join("sprites", "bed1.png"),
+            os.path.join("sprties", "bed1.png"),
+        ]
+        for bed_path in bed_paths:
+            if os.path.exists(bed_path):
+                bed = pygame.image.load(bed_path).convert_alpha()
+                sprites["bed"] = pygame.transform.smoothscale(bed, (sprite_size, sprite_size))
                 break
 
         return sprites
@@ -517,9 +565,12 @@ class Game:
         self.action_message_timer = 0.0
         self.skeletons = []
         self.skeleton_hitboxes = []
+        self.sheep = []
+        self.sheep_hitboxes = []
         self.health = self.max_health
         self.tier1_skeleton_spawn_timer = 0.0
         self.tier2_skeleton_spawn_timer = 0.0
+        self.sheep_spawn_timer = 0.0
 
     def draw_health_hud(self):
         heart_size = self.full_heart_sprite.get_width()
@@ -584,7 +635,7 @@ class Game:
 
     @staticmethod
     def max_stack_for_item(item_name: str) -> int:
-        if item_name in ("wooden_axe", "iron_sword", "iron_helmet"):
+        if item_name in ("wooden_axe", "iron_sword", "iron_helmet", "bed"):
             return 1
         return MAX_STACK_SIZE
 
@@ -608,6 +659,26 @@ class Game:
         if slot["item"] == "iron_sword":
             return 7
         return 1
+
+    def consume_meat_from_active_slot(self):
+        slot = self.inventory_slots[self.active_slot]
+        if slot is None or slot.get("item") != "meat" or slot.get("count", 0) <= 0:
+            self.action_message = "Hold meat in the selected slot to eat"
+            self.action_message_timer = 1.0
+            return
+
+        if self.health >= self.max_health:
+            self.action_message = "Health is already full"
+            self.action_message_timer = 1.0
+            return
+
+        slot["count"] -= 1
+        if slot["count"] <= 0:
+            self.inventory_slots[self.active_slot] = None
+
+        self.heal(5)
+        self.action_message = "Ate meat and restored 5 HP"
+        self.action_message_timer = 1.1
 
     def has_iron_helmet_equipped(self) -> bool:
         for armor_slot in self.armor_slots:
@@ -713,6 +784,34 @@ class Game:
             return
 
         self.action_message = "Crafted 1 wooden axe"
+        self.action_message_timer = 1.4
+
+    def craft_bed(self):
+        if self.count_item("wool") < 2 or self.count_item("planks") < 2:
+            self.action_message = "Need 2 wool and 2 planks to craft a bed"
+            self.action_message_timer = 1.6
+            return
+
+        removed_wool = self.remove_item_from_inventory("wool", 2)
+        removed_planks = self.remove_item_from_inventory("planks", 2)
+        if removed_wool < 2 or removed_planks < 2:
+            if removed_wool > 0:
+                self.add_item_to_inventory("wool", removed_wool)
+            if removed_planks > 0:
+                self.add_item_to_inventory("planks", removed_planks)
+            self.action_message = "Craft failed"
+            self.action_message_timer = 1.2
+            return
+
+        added = self.add_item_to_inventory("bed", 1)
+        if added < 1:
+            self.add_item_to_inventory("wool", 2)
+            self.add_item_to_inventory("planks", 2)
+            self.action_message = "No inventory space for bed"
+            self.action_message_timer = 1.4
+            return
+
+        self.action_message = "Crafted 1 bed"
         self.action_message_timer = 1.4
 
     def load_skeleton_sprites(self) -> dict[int, pygame.Surface]:
@@ -855,18 +954,163 @@ class Game:
                     self.action_message = f"Skeleton tier {skeleton.get('tier', 1)} hit you for {damage} damage"
                     self.action_message_timer = 1.0
 
+    def load_sheep_sprite(self) -> pygame.Surface:
+        sheep = pygame.Surface((56, 42), pygame.SRCALPHA)
+        pygame.draw.ellipse(sheep, (232, 232, 232), (8, 9, 40, 24))
+        pygame.draw.ellipse(sheep, (254, 254, 254), (16, 6, 24, 20))
+        pygame.draw.rect(sheep, (87, 78, 69), (42, 16, 10, 10), border_radius=3)
+        pygame.draw.rect(sheep, (87, 78, 69), (17, 29, 5, 11), border_radius=2)
+        pygame.draw.rect(sheep, (87, 78, 69), (34, 29, 5, 11), border_radius=2)
+
+        sheep_paths = [
+            os.path.join("sprites", "sheep1.png"),
+            os.path.join("sprties", "sheep1.png"),
+        ]
+        for sheep_path in sheep_paths:
+            if os.path.exists(sheep_path):
+                sheep = pygame.image.load(sheep_path).convert_alpha()
+                break
+
+        return sheep
+
+    def get_scaled_sheep_sprite(self, target_height: int) -> pygame.Surface:
+        h = max(8, target_height)
+        if h in self.sheep_sprite_scale_cache:
+            return self.sheep_sprite_scale_cache[h]
+
+        base_w, base_h = self.sheep_sprite.get_size()
+        scaled_w = max(4, int(base_w * (h / max(1, base_h))))
+        scaled = pygame.transform.smoothscale(self.sheep_sprite, (scaled_w, h))
+        self.sheep_sprite_scale_cache[h] = scaled
+        return scaled
+
+    def spawn_sheep_near_player(self):
+        angle = random.uniform(0.0, math.tau)
+        dist = random.uniform(16.0, 40.0)
+        sx = self.player_x + math.sin(angle) * dist
+        sz = self.player_z + math.cos(angle) * dist
+        self.sheep.append(
+            {
+                "x": sx,
+                "z": sz,
+                "hp": SHEEP_MAX_HEALTH,
+                "wander_angle": random.uniform(-math.pi, math.pi),
+                "wander_timer": random.uniform(0.2, 1.1),
+            }
+        )
+
+    def kill_sheep(self, sheep: dict):
+        if sheep in self.sheep:
+            self.sheep.remove(sheep)
+
+        meats = random.randint(1, 3)
+        wool = random.randint(1, 2)
+        added_meat = self.add_item_to_inventory("meat", meats)
+        added_wool = self.add_item_to_inventory("wool", wool)
+        dropped_meat = meats - added_meat
+        dropped_wool = wool - added_wool
+
+        self.action_message = f"Sheep defeated: +{added_meat} meat, +{added_wool} wool"
+        if dropped_meat > 0 or dropped_wool > 0:
+            self.action_message += f" ({dropped_meat} meat, {dropped_wool} wool dropped)"
+        self.action_message_timer = 1.6
+
+    def update_sheep(self, dt: float):
+        if self.is_daytime():
+            self.sheep_spawn_timer += dt
+            while self.sheep_spawn_timer >= SHEEP_SPAWN_INTERVAL:
+                self.sheep_spawn_timer -= SHEEP_SPAWN_INTERVAL
+                if len(self.sheep) < SHEEP_MAX_COUNT:
+                    self.spawn_sheep_near_player()
+
+        for sheep in self.sheep:
+            sheep["wander_timer"] -= dt
+            if sheep["wander_timer"] <= 0.0:
+                sheep["wander_angle"] = random.uniform(-math.pi, math.pi)
+                sheep["wander_timer"] = random.uniform(0.5, 1.7)
+
+            dx = sheep["x"] - self.player_x
+            dz = sheep["z"] - self.player_z
+            dist = math.hypot(dx, dz)
+
+            if dist < 8.0:
+                run_angle = math.atan2(dx, dz)
+                speed = 7.8
+                sheep["x"] += math.sin(run_angle) * speed * dt
+                sheep["z"] += math.cos(run_angle) * speed * dt
+            else:
+                speed = 2.2
+                sheep["x"] += math.sin(sheep["wander_angle"]) * speed * dt
+                sheep["z"] += math.cos(sheep["wander_angle"]) * speed * dt
+
+    def draw_sheep(self):
+        current_camera_height = self.camera_world_height()
+        self.sheep_hitboxes = []
+        visible_sheep = []
+
+        for sheep in self.sheep:
+            dx = sheep["x"] - self.player_x
+            dz = sheep["z"] - self.player_z
+            distance = math.hypot(dx, dz)
+
+            if distance <= 1.0 or distance > VIEW_DISTANCE:
+                continue
+
+            angle = math.atan2(dx, dz)
+            rel_angle = self.wrap_angle(angle - self.player_yaw)
+            if abs(rel_angle) > FOV * 0.62:
+                continue
+
+            visible_sheep.append((distance, rel_angle, sheep))
+
+        visible_sheep.sort(reverse=True, key=lambda item: item[0])
+
+        for distance, rel_angle, sheep in visible_sheep:
+            sx = int((rel_angle / FOV + 0.5) * LOW_RES_WIDTH)
+            if sx < -10 or sx > LOW_RES_WIDTH + 10:
+                continue
+
+            ground_h = self.terrain.height(sheep["x"], sheep["z"])
+            feet_y = HORIZON - int((ground_h - current_camera_height) * 85.0 / distance)
+            top_h = ground_h + 8.0
+            top_y = HORIZON - int((top_h - current_camera_height) * 85.0 / distance)
+
+            sprite_h = max(8, feet_y - top_y)
+            sheep_sprite = self.get_scaled_sheep_sprite(sprite_h)
+            sprite_x = sx - sheep_sprite.get_width() // 2
+            sprite_y = feet_y - sheep_sprite.get_height()
+
+            self.world_surface.blit(sheep_sprite, (sprite_x, sprite_y))
+            self.sheep_hitboxes.append(
+                {
+                    "sheep": sheep,
+                    "distance": distance,
+                    "rect": pygame.Rect(sprite_x, sprite_y, sheep_sprite.get_width(), sheep_sprite.get_height()),
+                }
+            )
+
     def player_attack_skeleton(self, mouse_pos: tuple[int, int] | None = None) -> bool:
         target = None
         target_distance = 1e9
+        target_kind = "skeleton"
 
         if mouse_pos is not None:
             screen_w, screen_h = self.screen.get_size()
             low_x = int(mouse_pos[0] * LOW_RES_WIDTH / max(1, screen_w))
             low_y = int(mouse_pos[1] * LOW_RES_HEIGHT / max(1, screen_h))
+
+            for hit in reversed(self.sheep_hitboxes):
+                if hit["rect"].collidepoint(low_x, low_y):
+                    target = hit["sheep"]
+                    target_distance = hit["distance"]
+                    target_kind = "sheep"
+                    break
+
             for hit in reversed(self.skeleton_hitboxes):
                 if hit["rect"].collidepoint(low_x, low_y):
                     target = hit["skeleton"]
                     target_distance = hit["distance"]
+                    target_kind = "skeleton"
                     break
         else:
             for skeleton in self.skeletons:
@@ -882,21 +1126,46 @@ class Game:
                 if dist < target_distance:
                     target = skeleton
                     target_distance = dist
+                    target_kind = "skeleton"
+
+            for sheep in self.sheep:
+                dx = sheep["x"] - self.player_x
+                dz = sheep["z"] - self.player_z
+                dist = math.hypot(dx, dz)
+                if dist > 11.0:
+                    continue
+                target_angle = math.atan2(dx, dz)
+                rel_angle = self.wrap_angle(target_angle - self.player_yaw)
+                if abs(rel_angle) > math.radians(18):
+                    continue
+                if dist < target_distance:
+                    target = sheep
+                    target_distance = dist
+                    target_kind = "sheep"
 
         if target is None:
             return False
 
         if target_distance > 11.0:
-            self.action_message = "Skeleton is too far away"
+            if target_kind == "skeleton":
+                self.action_message = "Skeleton is too far away"
+            else:
+                self.action_message = "Sheep is too far away"
             self.action_message_timer = 1.0
             return True
 
         dmg = self.equipped_weapon_damage()
         target["hp"] -= dmg
         if target["hp"] <= 0:
-            self.kill_skeleton(target)
+            if target_kind == "skeleton":
+                self.kill_skeleton(target)
+            else:
+                self.kill_sheep(target)
         else:
-            self.action_message = f"Hit skeleton for {dmg} damage ({target['hp']} HP left)"
+            if target_kind == "skeleton":
+                self.action_message = f"Hit skeleton for {dmg} damage ({target['hp']} HP left)"
+            else:
+                self.action_message = f"Hit sheep for {dmg} damage ({target['hp']} HP left)"
             self.action_message_timer = 1.0
 
         return True
@@ -1303,13 +1572,13 @@ class Game:
                 pygame.draw.rect(self.screen, (118, 131, 149), r, width=2, border_radius=7)
 
         recipe_text = self.font_small.render(
-            "Recipes: 1 Log->2 Planks | 1 Plank->5 Sticks | 3 Planks+2 Sticks->Axe",
+            "Recipes: 1 Log->2 Planks | 1 Plank->5 Sticks | 3 Planks+2 Sticks->Axe | 2 Wool+2 Planks->Bed",
             True,
             (230, 234, 240),
         )
         self.screen.blit(recipe_text, (panel_rect.x + 16, panel_rect.y + 262))
 
-        hint_text = self.font_small.render("Enter/C: planks, V: sticks, X: axe, R/Esc: close", True, (199, 209, 223))
+        hint_text = self.font_small.render("Enter/C: planks, V: sticks, X: axe, B: bed, R/Esc: close", True, (199, 209, 223))
         self.screen.blit(hint_text, (panel_rect.x + 16, panel_rect.y + 286))
 
         center_slot = pygame.Rect(grid_x + slot_size + gap, grid_y + slot_size + gap, slot_size, slot_size)
@@ -1339,6 +1608,13 @@ class Game:
         if axe_sprite is not None:
             self.screen.blit(axe_sprite, (axe_result_rect.x + 21, axe_result_rect.y + 21))
 
+        bed_result_rect = pygame.Rect(panel_rect.right - 366, panel_rect.y + 146, 72, 72)
+        pygame.draw.rect(self.screen, (35, 47, 61), bed_result_rect, border_radius=7)
+        pygame.draw.rect(self.screen, (138, 150, 167), bed_result_rect, width=2, border_radius=7)
+        bed_sprite = self.item_sprites.get("bed")
+        if bed_sprite is not None:
+            self.screen.blit(bed_sprite, (bed_result_rect.x + 21, bed_result_rect.y + 21))
+
         arrow_start = (center_slot.right + 8, center_slot.centery)
         arrow_end = (result_rect.x - 8, result_rect.centery)
         pygame.draw.line(self.screen, (211, 219, 228), arrow_start, arrow_end, 3)
@@ -1351,6 +1627,7 @@ class Game:
     def draw_play_mode(self):
         self.draw_terrain()
         self.draw_trees()
+        self.draw_sheep()
         self.draw_skeletons()
 
         if not self.is_daytime():
@@ -1384,18 +1661,25 @@ class Game:
         total_ingots = self.count_item("iron_ingot")
         total_swords = self.count_item("iron_sword")
         total_helmets = self.count_item("iron_helmet") + (1 if self.has_iron_helmet_equipped() else 0)
+        total_meat = self.count_item("meat")
+        total_wool = self.count_item("wool")
+        total_beds = self.count_item("bed")
         loot_display = self.font_small.render(
             (
                 f"Logs: {total_logs}  Saplings: {total_saplings}  Planks: {total_planks}  "
                 f"Sticks: {total_sticks}  Axes: {total_axes}  Bones: {total_bones}  Ingots: {total_ingots}  "
-                f"Iron Swords: {total_swords}  Helmets: {total_helmets}"
+                f"Iron Swords: {total_swords}  Helmets: {total_helmets}  Meat: {total_meat}  Wool: {total_wool}  Beds: {total_beds}"
             ),
             True,
             (236, 240, 246),
         )
         self.screen.blit(loot_display, (14, 34))
 
-        punch_hint = self.font_small.render("Punch: Left Click/F  Chop Cursor: Right Click  Craft: R", True, (236, 240, 246))
+        punch_hint = self.font_small.render(
+            "Punch: Left Click/F  Chop Cursor: Right Click  Craft: R  Eat Meat: Q",
+            True,
+            (236, 240, 246),
+        )
         self.screen.blit(punch_hint, (14, 56))
 
         self.draw_health_hud()
