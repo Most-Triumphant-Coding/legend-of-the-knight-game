@@ -26,8 +26,11 @@ TREE_COUNT = 120
 TREE_AREA_RADIUS = 220.0
 MAX_STACK_SIZE = 32
 MAX_HEALTH = 30
-DAY_DURATION_SECONDS = 300.0
-NIGHT_DURATION_SECONDS = 300.0
+DAY_DURATION_SECONDS = 60.0
+NIGHT_DURATION_SECONDS = 60.0
+SKELETON_MAX_HEALTH = 10
+SKELETON_TARGET_COUNT = 6
+SKELETON_SPAWN_INTERVAL = 2.0
 
 SKY_TOP = (110, 156, 209)
 SKY_BOTTOM = (181, 214, 238)
@@ -148,6 +151,11 @@ class Game:
         self.tree_sprite = self.load_tree_sprite()
         self.tree_sprite_scale_cache = {}
         self.tree_hitboxes = []
+        self.skeleton_sprite = self.load_skeleton_sprite()
+        self.skeleton_sprite_scale_cache = {}
+        self.skeleton_hitboxes = []
+        self.skeletons = []
+        self.skeleton_spawn_timer = 0.0
         self.trees = []
         self.action_message = ""
         self.action_message_timer = 0.0
@@ -193,6 +201,8 @@ class Game:
         self.health = self.max_health
         self.game_time_seconds = 0.0
         self.inventory_slots = [None] * 8
+        self.skeletons = []
+        self.skeleton_spawn_timer = 0.0
         self.action_message = ""
         self.action_message_timer = 0.0
         self.crafting_open = False
@@ -245,10 +255,12 @@ class Game:
                 self.vertical_velocity = JUMP_VELOCITY
                 self.is_grounded = False
             elif event.key == pygame.K_f:
-                self.punch_tree()
+                if not self.player_attack_skeleton():
+                    self.punch_tree()
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
-                self.punch_tree()
+                if not self.player_attack_skeleton(event.pos):
+                    self.punch_tree()
             elif event.button == 3:
                 self.chop_tree_at_cursor(event.pos)
 
@@ -258,6 +270,7 @@ class Game:
 
     def update_player(self, dt: float):
         self.game_time_seconds += dt
+        self.update_skeletons(dt)
 
         if self.crafting_open:
             if self.action_message_timer > 0.0:
@@ -334,6 +347,8 @@ class Game:
             "planks": self.create_wood_sprite(sprite_size),
             "sticks": self.create_wood_sprite(sprite_size),
             "wooden_axe": self.create_axe_sprite(sprite_size),
+            "bone": self.create_wood_sprite(sprite_size),
+            "iron_sword": self.create_axe_sprite(sprite_size),
         }
 
         sapling_path = os.path.join("sprites", "sappling1.png")
@@ -365,6 +380,17 @@ class Game:
             if os.path.exists(axe_path):
                 axe = pygame.image.load(axe_path).convert_alpha()
                 sprites["wooden_axe"] = pygame.transform.smoothscale(axe, (sprite_size, sprite_size))
+                break
+
+        sword_paths = [
+            os.path.join("sprites", "iron sword2.png"),
+            os.path.join("sprites", "iron_sword2.png"),
+            os.path.join("sprties", "iron sword2.png"),
+        ]
+        for sword_path in sword_paths:
+            if os.path.exists(sword_path):
+                sword = pygame.image.load(sword_path).convert_alpha()
+                sprites["iron_sword"] = pygame.transform.smoothscale(sword, (sprite_size, sprite_size))
                 break
 
         return sprites
@@ -497,7 +523,7 @@ class Game:
 
     @staticmethod
     def max_stack_for_item(item_name: str) -> int:
-        if item_name == "wooden_axe":
+        if item_name in ("wooden_axe", "iron_sword"):
             return 1
         return MAX_STACK_SIZE
 
@@ -511,6 +537,16 @@ class Game:
     def has_equipped_wooden_axe(self) -> bool:
         slot = self.inventory_slots[self.active_slot]
         return slot is not None and slot["item"] == "wooden_axe" and slot["count"] > 0
+
+    def equipped_weapon_damage(self) -> int:
+        slot = self.inventory_slots[self.active_slot]
+        if slot is None:
+            return 1
+        if slot["item"] == "wooden_axe":
+            return 4
+        if slot["item"] == "iron_sword":
+            return 7
+        return 1
 
     def remove_item_from_inventory(self, item_name: str, amount: int) -> int:
         remaining = amount
@@ -602,6 +638,142 @@ class Game:
 
         self.action_message = "Crafted 1 wooden axe"
         self.action_message_timer = 1.4
+
+    def load_skeleton_sprite(self) -> pygame.Surface:
+        sprite = pygame.Surface((48, 72), pygame.SRCALPHA)
+        pygame.draw.rect(sprite, (205, 210, 220), (17, 14, 14, 36), border_radius=3)
+        pygame.draw.circle(sprite, (225, 228, 236), (24, 10), 9)
+        pygame.draw.rect(sprite, (190, 194, 203), (12, 50, 8, 18), border_radius=2)
+        pygame.draw.rect(sprite, (190, 194, 203), (28, 50, 8, 18), border_radius=2)
+
+        skeleton_paths = [
+            os.path.join("sprites", "skeleton1.png"),
+            os.path.join("sprties", "skeleton1.png"),
+        ]
+        for skeleton_path in skeleton_paths:
+            if os.path.exists(skeleton_path):
+                sprite = pygame.image.load(skeleton_path).convert_alpha()
+                break
+
+        return sprite
+
+    def get_scaled_skeleton_sprite(self, target_height: int) -> pygame.Surface:
+        h = max(8, target_height)
+        if h in self.skeleton_sprite_scale_cache:
+            return self.skeleton_sprite_scale_cache[h]
+
+        base_w, base_h = self.skeleton_sprite.get_size()
+        scaled_w = max(4, int(base_w * (h / max(1, base_h))))
+        scaled = pygame.transform.smoothscale(self.skeleton_sprite, (scaled_w, h))
+        self.skeleton_sprite_scale_cache[h] = scaled
+        return scaled
+
+    def spawn_skeleton_near_player(self):
+        angle = random.uniform(0.0, math.tau)
+        dist = random.uniform(20.0, 45.0)
+        sx = self.player_x + math.sin(angle) * dist
+        sz = self.player_z + math.cos(angle) * dist
+        self.skeletons.append({"x": sx, "z": sz, "hp": SKELETON_MAX_HEALTH, "attack_cd": 0.0})
+
+    def kill_skeleton(self, skeleton: dict):
+        if skeleton in self.skeletons:
+            self.skeletons.remove(skeleton)
+
+        bones = random.randint(1, 5)
+        added_bones = self.add_item_to_inventory("bone", bones)
+        dropped_bones = bones - added_bones
+
+        got_sword = random.random() < 0.25
+        added_sword = 0
+        if got_sword:
+            added_sword = self.add_item_to_inventory("iron_sword", 1)
+
+        self.action_message = f"Skeleton defeated: +{added_bones} bone"
+        if got_sword:
+            if added_sword > 0:
+                self.action_message += " and +1 iron sword"
+            else:
+                self.action_message += " (iron sword dropped due to full inventory)"
+        if dropped_bones > 0:
+            self.action_message += f" ({dropped_bones} bone dropped)"
+        self.action_message_timer = 1.8
+
+    def update_skeletons(self, dt: float):
+        if self.is_daytime():
+            self.skeletons.clear()
+            self.skeleton_hitboxes = []
+            self.skeleton_spawn_timer = 0.0
+            return
+
+        self.skeleton_spawn_timer += dt
+        while len(self.skeletons) < SKELETON_TARGET_COUNT and self.skeleton_spawn_timer >= SKELETON_SPAWN_INTERVAL:
+            self.spawn_skeleton_near_player()
+            self.skeleton_spawn_timer -= SKELETON_SPAWN_INTERVAL
+
+        for skeleton in self.skeletons:
+            if skeleton["attack_cd"] > 0.0:
+                skeleton["attack_cd"] = max(0.0, skeleton["attack_cd"] - dt)
+
+            dx = self.player_x - skeleton["x"]
+            dz = self.player_z - skeleton["z"]
+            dist = math.hypot(dx, dz)
+
+            if dist > 1.8:
+                speed = 5.5
+                skeleton["x"] += (dx / max(0.001, dist)) * speed * dt
+                skeleton["z"] += (dz / max(0.001, dist)) * speed * dt
+            else:
+                if skeleton["attack_cd"] <= 0.0:
+                    self.take_damage(5)
+                    skeleton["attack_cd"] = 1.0
+                    self.action_message = "Skeleton hit you for 5 damage"
+                    self.action_message_timer = 1.0
+
+    def player_attack_skeleton(self, mouse_pos: tuple[int, int] | None = None) -> bool:
+        target = None
+        target_distance = 1e9
+
+        if mouse_pos is not None:
+            screen_w, screen_h = self.screen.get_size()
+            low_x = int(mouse_pos[0] * LOW_RES_WIDTH / max(1, screen_w))
+            low_y = int(mouse_pos[1] * LOW_RES_HEIGHT / max(1, screen_h))
+            for hit in reversed(self.skeleton_hitboxes):
+                if hit["rect"].collidepoint(low_x, low_y):
+                    target = hit["skeleton"]
+                    target_distance = hit["distance"]
+                    break
+        else:
+            for skeleton in self.skeletons:
+                dx = skeleton["x"] - self.player_x
+                dz = skeleton["z"] - self.player_z
+                dist = math.hypot(dx, dz)
+                if dist > 11.0:
+                    continue
+                target_angle = math.atan2(dx, dz)
+                rel_angle = self.wrap_angle(target_angle - self.player_yaw)
+                if abs(rel_angle) > math.radians(18):
+                    continue
+                if dist < target_distance:
+                    target = skeleton
+                    target_distance = dist
+
+        if target is None:
+            return False
+
+        if target_distance > 11.0:
+            self.action_message = "Skeleton is too far away"
+            self.action_message_timer = 1.0
+            return True
+
+        dmg = self.equipped_weapon_damage()
+        target["hp"] -= dmg
+        if target["hp"] <= 0:
+            self.kill_skeleton(target)
+        else:
+            self.action_message = f"Hit skeleton for {dmg} damage ({target['hp']} HP left)"
+            self.action_message_timer = 1.0
+
+        return True
 
     def camera_world_height(self) -> float:
         return self.player_ground_height + CAMERA_HEIGHT + self.jump_offset
@@ -842,6 +1014,52 @@ class Game:
                 }
             )
 
+    def draw_skeletons(self):
+        current_camera_height = self.camera_world_height()
+        self.skeleton_hitboxes = []
+        visible_skeletons = []
+
+        for skeleton in self.skeletons:
+            dx = skeleton["x"] - self.player_x
+            dz = skeleton["z"] - self.player_z
+            distance = math.hypot(dx, dz)
+
+            if distance <= 1.0 or distance > VIEW_DISTANCE:
+                continue
+
+            angle = math.atan2(dx, dz)
+            rel_angle = self.wrap_angle(angle - self.player_yaw)
+            if abs(rel_angle) > FOV * 0.62:
+                continue
+
+            visible_skeletons.append((distance, rel_angle, skeleton))
+
+        visible_skeletons.sort(reverse=True, key=lambda item: item[0])
+
+        for distance, rel_angle, skeleton in visible_skeletons:
+            sx = int((rel_angle / FOV + 0.5) * LOW_RES_WIDTH)
+            if sx < -10 or sx > LOW_RES_WIDTH + 10:
+                continue
+
+            ground_h = self.terrain.height(skeleton["x"], skeleton["z"])
+            feet_y = HORIZON - int((ground_h - current_camera_height) * 85.0 / distance)
+            top_h = ground_h + 14.0
+            top_y = HORIZON - int((top_h - current_camera_height) * 85.0 / distance)
+
+            sprite_h = max(8, feet_y - top_y)
+            skeleton_sprite = self.get_scaled_skeleton_sprite(sprite_h)
+            sprite_x = sx - skeleton_sprite.get_width() // 2
+            sprite_y = feet_y - skeleton_sprite.get_height()
+
+            self.world_surface.blit(skeleton_sprite, (sprite_x, sprite_y))
+            self.skeleton_hitboxes.append(
+                {
+                    "skeleton": skeleton,
+                    "distance": distance,
+                    "rect": pygame.Rect(sprite_x, sprite_y, skeleton_sprite.get_width(), skeleton_sprite.get_height()),
+                }
+            )
+
     def draw_crosshair(self):
         w, h = self.screen.get_size()
         cx = w // 2
@@ -1003,6 +1221,7 @@ class Game:
     def draw_play_mode(self):
         self.draw_terrain()
         self.draw_trees()
+        self.draw_skeletons()
 
         if not self.is_daytime():
             # Darken world during night while keeping HUD readable.
@@ -1031,10 +1250,12 @@ class Game:
         total_planks = self.count_item("planks")
         total_sticks = self.count_item("sticks")
         total_axes = self.count_item("wooden_axe")
+        total_bones = self.count_item("bone")
+        total_swords = self.count_item("iron_sword")
         loot_display = self.font_small.render(
             (
                 f"Logs: {total_logs}  Saplings: {total_saplings}  Planks: {total_planks}  "
-                f"Sticks: {total_sticks}  Axes: {total_axes}"
+                f"Sticks: {total_sticks}  Axes: {total_axes}  Bones: {total_bones}  Iron Swords: {total_swords}"
             ),
             True,
             (236, 240, 246),
