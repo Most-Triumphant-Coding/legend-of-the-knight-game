@@ -8,7 +8,7 @@ import pygame
 
 WIDTH = 1280
 HEIGHT = 720
-FPS = 64
+FPS = 128
 
 LOW_RES_WIDTH = 320
 LOW_RES_HEIGHT = 180
@@ -17,7 +17,7 @@ FOV = math.radians(70)
 HORIZON = LOW_RES_HEIGHT // 2 - 8
 VIEW_DISTANCE = 85
 CAMERA_HEIGHT = 10.0
-TURN_STEP_RADIANS = math.radians(1.0)
+TURN_STEP_RADIANS = math.radians(5.0)
 MOVE_SPEED = 22.0
 JUMP_VELOCITY = 12.5
 GRAVITY = 30.0
@@ -645,8 +645,31 @@ class Game:
 
     def consume_meat_from_active_slot(self):
         slot = self.inventory_slots[self.active_slot]
+        if slot is not None and slot.get("item") == "bed" and slot.get("count", 0) > 0:
+            if self.is_daytime():
+                self.action_message = "You can only sleep through the night"
+                self.action_message_timer = 1.0
+                return
+
+            slot["count"] -= 1
+            if slot["count"] <= 0:
+                self.inventory_slots[self.active_slot] = None
+
+            cycle = DAY_DURATION_SECONDS + NIGHT_DURATION_SECONDS
+            t = self.game_time_seconds % cycle
+            self.game_time_seconds += cycle - t
+
+            self.skeletons = []
+            self.skeleton_hitboxes = []
+            self.tier1_skeleton_spawn_timer = 0.0
+            self.tier2_skeleton_spawn_timer = 0.0
+
+            self.action_message = "Skipped the night. Bed consumed"
+            self.action_message_timer = 1.4
+            return
+
         if slot is None or slot.get("item") != "meat" or slot.get("count", 0) <= 0:
-            self.action_message = "Hold meat in the selected slot to eat"
+            self.action_message = "Hold meat to eat or hold a bed to skip night"
             self.action_message_timer = 1.0
             return
 
@@ -1659,7 +1682,7 @@ class Game:
         self.screen.blit(loot_display, (14, 34))
 
         punch_hint = self.font_small.render(
-            "Punch: Left Click/F  Chop Cursor: Right Click  Craft: R  Eat Meat: Q",
+            "Punch: Left Click/F  Chop Cursor: Right Click  Craft: R  Use Bed/Eat Meat: Q",
             True,
             (236, 240, 246),
         )
