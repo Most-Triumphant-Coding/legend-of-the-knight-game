@@ -1,4 +1,5 @@
 import math
+import os
 import random
 import sys
 
@@ -16,12 +17,14 @@ FOV = math.radians(70)
 HORIZON = LOW_RES_HEIGHT // 2 - 8
 VIEW_DISTANCE = 115
 CAMERA_HEIGHT = 10.0
-TURN_SPEED = 1.8
+TURN_STEP_RADIANS = math.radians(1.0)
+TURN_STEP_INTERVAL = 1.0 / 16.0
 MOVE_SPEED = 22.0
 JUMP_VELOCITY = 12.5
 GRAVITY = 30.0
 TREE_COUNT = 120
 TREE_AREA_RADIUS = 220.0
+MAX_STACK_SIZE = 16
 
 SKY_TOP = (110, 156, 209)
 SKY_BOTTOM = (181, 214, 238)
@@ -125,12 +128,13 @@ class Game:
         self.jump_offset = 0.0
         self.vertical_velocity = 0.0
         self.is_grounded = True
+        self.turn_hold_a = 0.0
+        self.turn_hold_d = 0.0
 
         self.active_slot = 0
         self.inventory_slots = [None] * 8
         self.armor_slots = [None] * 4
-        self.logs = 0
-        self.saplings = 0
+        self.item_sprites = self.load_item_sprites()
         self.trees = []
         self.action_message = ""
         self.action_message_timer = 0.0
@@ -170,8 +174,9 @@ class Game:
         self.jump_offset = 0.0
         self.vertical_velocity = 0.0
         self.is_grounded = True
-        self.logs = 0
-        self.saplings = 0
+        self.turn_hold_a = 0.0
+        self.turn_hold_d = 0.0
+        self.inventory_slots = [None] * 8
         self.action_message = ""
         self.action_message_timer = 0.0
 
@@ -210,9 +215,22 @@ class Game:
         keys = pygame.key.get_pressed()
 
         if keys[pygame.K_a]:
-            self.player_yaw -= TURN_SPEED * dt
+            self.turn_hold_a += dt
+            steps = int(self.turn_hold_a / TURN_STEP_INTERVAL)
+            if steps > 0:
+                self.player_yaw -= TURN_STEP_RADIANS * steps
+                self.turn_hold_a -= TURN_STEP_INTERVAL * steps
+        else:
+            self.turn_hold_a = 0.0
+
         if keys[pygame.K_d]:
-            self.player_yaw += TURN_SPEED * dt
+            self.turn_hold_d += dt
+            steps = int(self.turn_hold_d / TURN_STEP_INTERVAL)
+            if steps > 0:
+                self.player_yaw += TURN_STEP_RADIANS * steps
+                self.turn_hold_d -= TURN_STEP_INTERVAL * steps
+        else:
+            self.turn_hold_d = 0.0
 
         forward_x = math.sin(self.player_yaw)
         forward_z = math.cos(self.player_yaw)
@@ -238,6 +256,63 @@ class Game:
 
         if self.action_message_timer > 0.0:
             self.action_message_timer = max(0.0, self.action_message_timer - dt)
+
+    @staticmethod
+    def create_wood_sprite(size: int) -> pygame.Surface:
+        sprite = pygame.Surface((size, size), pygame.SRCALPHA)
+        pygame.draw.rect(sprite, (102, 65, 41), (4, 8, size - 8, size - 14), border_radius=4)
+        pygame.draw.rect(sprite, (134, 88, 58), (6, 10, size - 12, size - 18), border_radius=3)
+        pygame.draw.line(sprite, (88, 52, 31), (8, size - 9), (size - 8, size - 9), 2)
+        pygame.draw.line(sprite, (88, 52, 31), (8, 13), (size - 8, 13), 2)
+        return sprite
+
+    def load_item_sprites(self) -> dict[str, pygame.Surface]:
+        sprite_size = 30
+        sprites = {
+            "wood": self.create_wood_sprite(sprite_size),
+            "sapling": self.create_wood_sprite(sprite_size),
+        }
+
+        sapling_path = os.path.join("sprites", "sappling1.png")
+        if os.path.exists(sapling_path):
+            sapling = pygame.image.load(sapling_path).convert_alpha()
+            sprites["sapling"] = pygame.transform.smoothscale(sapling, (sprite_size, sprite_size))
+
+        return sprites
+
+    def add_item_to_inventory(self, item_name: str, amount: int) -> int:
+        remaining = amount
+
+        for slot in self.inventory_slots:
+            if slot is None:
+                continue
+            if slot["item"] != item_name or slot["count"] >= MAX_STACK_SIZE:
+                continue
+
+            can_add = min(MAX_STACK_SIZE - slot["count"], remaining)
+            slot["count"] += can_add
+            remaining -= can_add
+            if remaining == 0:
+                return amount
+
+        for i in range(len(self.inventory_slots)):
+            if self.inventory_slots[i] is not None:
+                continue
+
+            can_add = min(MAX_STACK_SIZE, remaining)
+            self.inventory_slots[i] = {"item": item_name, "count": can_add}
+            remaining -= can_add
+            if remaining == 0:
+                return amount
+
+        return amount - remaining
+
+    def count_item(self, item_name: str) -> int:
+        total = 0
+        for slot in self.inventory_slots:
+            if slot is not None and slot["item"] == item_name:
+                total += slot["count"]
+        return total
 
     def camera_world_height(self) -> float:
         return self.player_ground_height + CAMERA_HEIGHT + self.jump_offset
@@ -320,9 +395,15 @@ class Game:
         best_tree["alive"] = False
         logs = random.randint(1, 5)
         saplings = random.randint(1, 3)
-        self.logs += logs
-        self.saplings += saplings
-        self.action_message = f"Collected {logs} logs and {saplings} saplings"
+
+        added_logs = self.add_item_to_inventory("wood", logs)
+        added_saplings = self.add_item_to_inventory("sapling", saplings)
+        dropped_logs = logs - added_logs
+        dropped_saplings = saplings - added_saplings
+
+        self.action_message = f"Collected {added_logs} logs and {added_saplings} saplings"
+        if dropped_logs > 0 or dropped_saplings > 0:
+            self.action_message += f" ({dropped_logs} logs, {dropped_saplings} saplings dropped)"
         self.action_message_timer = 1.8
 
     def build_sky_surface(self) -> pygame.Surface:
@@ -441,8 +522,20 @@ class Game:
             pygame.draw.rect(self.screen, fill, rect, border_radius=6)
             pygame.draw.rect(self.screen, border, rect, width=2, border_radius=6)
 
-            label = self.font_small.render(str(i + 1), True, (230, 235, 242))
-            self.screen.blit(label, (rect.x + 20, rect.y + 16))
+            hotkey = self.font_small.render(str(i + 1), True, (220, 224, 232))
+            self.screen.blit(hotkey, (rect.x + 4, rect.y + 2))
+
+            slot = self.inventory_slots[i]
+            if slot is not None:
+                sprite = self.item_sprites.get(slot["item"])
+                if sprite is not None:
+                    self.screen.blit(sprite, (rect.x + 11, rect.y + 11))
+
+                count_text = self.font_small.render(str(slot["count"]), True, (250, 250, 250))
+                self.screen.blit(
+                    count_text,
+                    (rect.right - count_text.get_width() - 4, rect.bottom - count_text.get_height() - 2),
+                )
 
         armor_total = slot_size * 4 + gap * 3
         armor_x = w // 2 - armor_total // 2
@@ -500,7 +593,13 @@ class Game:
         seed_display = self.font_small.render(f"Seed: {self.seed_text}", True, (236, 240, 246))
         self.screen.blit(seed_display, (14, 12))
 
-        loot_display = self.font_small.render(f"Logs: {self.logs}  Saplings: {self.saplings}", True, (236, 240, 246))
+        total_logs = self.count_item("wood")
+        total_saplings = self.count_item("sapling")
+        loot_display = self.font_small.render(
+            f"Logs: {total_logs}  Saplings: {total_saplings}",
+            True,
+            (236, 240, 246),
+        )
         self.screen.blit(loot_display, (14, 34))
 
         punch_hint = self.font_small.render("Punch: Left Click or F", True, (236, 240, 246))
