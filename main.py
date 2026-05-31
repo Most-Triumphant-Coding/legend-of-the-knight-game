@@ -25,6 +25,7 @@ GRAVITY = 30.0
 TREE_COUNT = 120
 TREE_AREA_RADIUS = 220.0
 MAX_STACK_SIZE = 32
+MAX_HEALTH = 30
 
 SKY_TOP = (110, 156, 209)
 SKY_BOTTOM = (181, 214, 238)
@@ -130,11 +131,14 @@ class Game:
         self.is_grounded = True
         self.turn_hold_a = 0.0
         self.turn_hold_d = 0.0
+        self.max_health = MAX_HEALTH
+        self.health = self.max_health
 
         self.active_slot = 0
         self.inventory_slots = [None] * 8
         self.armor_slots = [None] * 4
         self.item_sprites = self.load_item_sprites()
+        self.full_heart_sprite, self.empty_heart_sprite = self.load_heart_sprites()
         self.tree_sprite = self.load_tree_sprite()
         self.tree_sprite_scale_cache = {}
         self.tree_hitboxes = []
@@ -180,6 +184,7 @@ class Game:
         self.is_grounded = True
         self.turn_hold_a = 0.0
         self.turn_hold_d = 0.0
+        self.health = self.max_health
         self.inventory_slots = [None] * 8
         self.action_message = ""
         self.action_message_timer = 0.0
@@ -372,6 +377,75 @@ class Game:
                 break
 
         return sprite
+
+    def load_heart_sprites(self) -> tuple[pygame.Surface, pygame.Surface]:
+        size = 18
+        full = pygame.Surface((size, size), pygame.SRCALPHA)
+        empty = pygame.Surface((size, size), pygame.SRCALPHA)
+
+        # Fallback procedural hearts in case files are missing.
+        pygame.draw.circle(full, (225, 66, 79), (6, 6), 5)
+        pygame.draw.circle(full, (225, 66, 79), (12, 6), 5)
+        pygame.draw.polygon(full, (225, 66, 79), [(2, 8), (16, 8), (9, 17)])
+
+        pygame.draw.circle(empty, (188, 191, 201), (6, 6), 5, 2)
+        pygame.draw.circle(empty, (188, 191, 201), (12, 6), 5, 2)
+        pygame.draw.polygon(empty, (188, 191, 201), [(2, 8), (16, 8), (9, 17)], 2)
+
+        full_paths = [
+            os.path.join("sprites", "full heart1.png"),
+            os.path.join("sprties", "full heart1.png"),
+        ]
+        empty_paths = [
+            os.path.join("sprites", "emtpy heart1.png"),
+            os.path.join("sprites", "empty heart1.png"),
+            os.path.join("sprties", "emtpy heart1.png"),
+        ]
+
+        for p in full_paths:
+            if os.path.exists(p):
+                loaded = pygame.image.load(p).convert_alpha()
+                full = pygame.transform.smoothscale(loaded, (size, size))
+                break
+
+        for p in empty_paths:
+            if os.path.exists(p):
+                loaded = pygame.image.load(p).convert_alpha()
+                empty = pygame.transform.smoothscale(loaded, (size, size))
+                break
+
+        return full, empty
+
+    def set_health(self, health_value: int):
+        self.health = max(0, min(self.max_health, health_value))
+
+    def take_damage(self, amount: int):
+        self.set_health(self.health - max(0, amount))
+
+    def heal(self, amount: int):
+        self.set_health(self.health + max(0, amount))
+
+    def draw_health_hud(self):
+        heart_size = self.full_heart_sprite.get_width()
+        gap = 4
+        hearts_per_row = 10
+        rows = 3
+
+        total_width = hearts_per_row * heart_size + (hearts_per_row - 1) * gap
+        x_start = 14
+        y_start = 84
+
+        heart_index = 0
+        for row in range(rows):
+            for col in range(hearts_per_row):
+                x = x_start + col * (heart_size + gap)
+                y = y_start + row * (heart_size + gap)
+                sprite = self.full_heart_sprite if heart_index < self.health else self.empty_heart_sprite
+                self.screen.blit(sprite, (x, y))
+                heart_index += 1
+
+        hp_text = self.font_small.render(f"HP: {self.health}/{self.max_health}", True, (236, 240, 246))
+        self.screen.blit(hp_text, (x_start + total_width + 12, y_start + heart_size))
 
     def get_scaled_tree_sprite(self, target_height: int) -> pygame.Surface:
         h = max(8, target_height)
@@ -932,6 +1006,8 @@ class Game:
 
         punch_hint = self.font_small.render("Punch: Left Click/F  Chop Cursor: Right Click  Craft: R", True, (236, 240, 246))
         self.screen.blit(punch_hint, (14, 56))
+
+        self.draw_health_hud()
 
         if self.crafting_open:
             self.draw_crafting_overlay()
