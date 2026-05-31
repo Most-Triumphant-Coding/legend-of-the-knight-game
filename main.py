@@ -137,6 +137,7 @@ class Game:
         self.item_sprites = self.load_item_sprites()
         self.tree_sprite = self.load_tree_sprite()
         self.tree_sprite_scale_cache = {}
+        self.tree_hitboxes = []
         self.trees = []
         self.action_message = ""
         self.action_message_timer = 0.0
@@ -200,6 +201,9 @@ class Game:
                 self.start_game()
 
     def handle_play_event(self, event: pygame.event.Event):
+        if self.crafting_open and event.type == pygame.MOUSEBUTTONDOWN:
+            return
+
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_r:
                 self.crafting_open = not self.crafting_open
@@ -230,8 +234,11 @@ class Game:
                 self.is_grounded = False
             elif event.key == pygame.K_f:
                 self.punch_tree()
-        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            self.punch_tree()
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 1:
+                self.punch_tree()
+            elif event.button == 3:
+                self.chop_tree_at_cursor(event.pos)
 
     def start_button_rect(self) -> pygame.Rect:
         w, h = self.screen.get_size()
@@ -591,7 +598,10 @@ class Game:
             self.action_message_timer = 1.0
             return
 
-        best_tree["alive"] = False
+        self.harvest_tree(best_tree)
+
+    def harvest_tree(self, tree: dict):
+        tree["alive"] = False
         bonus = 4 if self.has_equipped_wooden_axe() else 0
         logs = random.randint(1, 5) + bonus
         saplings = random.randint(1, 3) + bonus
@@ -612,6 +622,40 @@ class Game:
                 f" ({dropped_logs} logs, {dropped_saplings} saplings, {dropped_sticks} sticks dropped)"
             )
         self.action_message_timer = 1.8
+
+    def chop_tree_at_cursor(self, mouse_pos: tuple[int, int]):
+        if not self.tree_hitboxes:
+            self.action_message = "No tree under cursor"
+            self.action_message_timer = 1.0
+            return
+
+        screen_w, screen_h = self.screen.get_size()
+        low_x = int(mouse_pos[0] * LOW_RES_WIDTH / max(1, screen_w))
+        low_y = int(mouse_pos[1] * LOW_RES_HEIGHT / max(1, screen_h))
+
+        selected_tree = None
+        selected_distance = 1e9
+        for hit in reversed(self.tree_hitboxes):
+            rect = hit["rect"]
+            tree = hit["tree"]
+            if not tree["alive"]:
+                continue
+            if rect.collidepoint(low_x, low_y):
+                selected_tree = tree
+                selected_distance = hit["distance"]
+                break
+
+        if selected_tree is None:
+            self.action_message = "No tree under cursor"
+            self.action_message_timer = 1.0
+            return
+
+        if selected_distance > 10.0:
+            self.action_message = "Tree is too far away"
+            self.action_message_timer = 1.0
+            return
+
+        self.harvest_tree(selected_tree)
 
     def build_sky_surface(self) -> pygame.Surface:
         surface = pygame.Surface((LOW_RES_WIDTH, LOW_RES_HEIGHT))
@@ -653,6 +697,7 @@ class Game:
 
     def draw_trees(self):
         current_camera_height = self.camera_world_height()
+        self.tree_hitboxes = []
         visible_trees = []
 
         for tree in self.trees:
@@ -691,6 +736,13 @@ class Game:
             sprite_y = trunk_bottom_y - tree_sprite.get_height()
 
             self.world_surface.blit(tree_sprite, (sprite_x, sprite_y))
+            self.tree_hitboxes.append(
+                {
+                    "tree": tree,
+                    "distance": distance,
+                    "rect": pygame.Rect(sprite_x, sprite_y, tree_sprite.get_width(), tree_sprite.get_height()),
+                }
+            )
 
     def draw_crosshair(self):
         w, h = self.screen.get_size()
@@ -878,7 +930,7 @@ class Game:
         )
         self.screen.blit(loot_display, (14, 34))
 
-        punch_hint = self.font_small.render("Punch: Left Click/F  Craft: R", True, (236, 240, 246))
+        punch_hint = self.font_small.render("Punch: Left Click/F  Chop Cursor: Right Click  Craft: R", True, (236, 240, 246))
         self.screen.blit(punch_hint, (14, 56))
 
         if self.crafting_open:
