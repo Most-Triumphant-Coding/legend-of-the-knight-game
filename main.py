@@ -26,9 +26,13 @@ TREE_COUNT = 120
 TREE_AREA_RADIUS = 220.0
 MAX_STACK_SIZE = 32
 MAX_HEALTH = 30
+DAY_DURATION_SECONDS = 300.0
+NIGHT_DURATION_SECONDS = 300.0
 
 SKY_TOP = (110, 156, 209)
 SKY_BOTTOM = (181, 214, 238)
+NIGHT_SKY_TOP = (13, 22, 41)
+NIGHT_SKY_BOTTOM = (35, 52, 86)
 
 
 class SeededTerrain:
@@ -108,9 +112,11 @@ class Game:
         pygame.display.set_caption("Legend of the Knight - pygame-ce")
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
         self.clock = pygame.time.Clock()
+        self.game_time_seconds = 0.0
 
         self.world_surface = pygame.Surface((LOW_RES_WIDTH, LOW_RES_HEIGHT))
-        self.sky_surface = self.build_sky_surface()
+        self.day_sky_surface = self.build_sky_surface(SKY_TOP, SKY_BOTTOM)
+        self.night_sky_surface = self.build_sky_surface(NIGHT_SKY_TOP, NIGHT_SKY_BOTTOM)
 
         self.font_title = pygame.font.SysFont("georgia", 56, bold=True)
         self.font_ui = pygame.font.SysFont("consolas", 22)
@@ -185,6 +191,7 @@ class Game:
         self.turn_hold_a = 0.0
         self.turn_hold_d = 0.0
         self.health = self.max_health
+        self.game_time_seconds = 0.0
         self.inventory_slots = [None] * 8
         self.action_message = ""
         self.action_message_timer = 0.0
@@ -250,6 +257,8 @@ class Game:
         return pygame.Rect(w // 2 - 170, h // 2 + 74, 340, 56)
 
     def update_player(self, dt: float):
+        self.game_time_seconds += dt
+
         if self.crafting_open:
             if self.action_message_timer > 0.0:
                 self.action_message_timer = max(0.0, self.action_message_timer - dt)
@@ -731,20 +740,35 @@ class Game:
 
         self.harvest_tree(selected_tree)
 
-    def build_sky_surface(self) -> pygame.Surface:
+    def is_daytime(self) -> bool:
+        cycle = DAY_DURATION_SECONDS + NIGHT_DURATION_SECONDS
+        t = self.game_time_seconds % cycle
+        return t < DAY_DURATION_SECONDS
+
+    def time_until_phase_change(self) -> float:
+        cycle = DAY_DURATION_SECONDS + NIGHT_DURATION_SECONDS
+        t = self.game_time_seconds % cycle
+        if t < DAY_DURATION_SECONDS:
+            return DAY_DURATION_SECONDS - t
+        return cycle - t
+
+    def build_sky_surface(self, top_color: tuple[int, int, int], bottom_color: tuple[int, int, int]) -> pygame.Surface:
         surface = pygame.Surface((LOW_RES_WIDTH, LOW_RES_HEIGHT))
         for y in range(LOW_RES_HEIGHT):
             t = y / max(1, LOW_RES_HEIGHT - 1)
             color = (
-                int(SKY_TOP[0] + (SKY_BOTTOM[0] - SKY_TOP[0]) * t),
-                int(SKY_TOP[1] + (SKY_BOTTOM[1] - SKY_TOP[1]) * t),
-                int(SKY_TOP[2] + (SKY_BOTTOM[2] - SKY_TOP[2]) * t),
+                int(top_color[0] + (bottom_color[0] - top_color[0]) * t),
+                int(top_color[1] + (bottom_color[1] - top_color[1]) * t),
+                int(top_color[2] + (bottom_color[2] - top_color[2]) * t),
             )
             pygame.draw.line(surface, color, (0, y), (LOW_RES_WIDTH, y))
         return surface
 
     def draw_terrain(self):
-        self.world_surface.blit(self.sky_surface, (0, 0))
+        if self.is_daytime():
+            self.world_surface.blit(self.day_sky_surface, (0, 0))
+        else:
+            self.world_surface.blit(self.night_sky_surface, (0, 0))
         current_camera_height = self.camera_world_height()
 
         for sx in range(LOW_RES_WIDTH):
@@ -980,6 +1004,12 @@ class Game:
         self.draw_terrain()
         self.draw_trees()
 
+        if not self.is_daytime():
+            # Darken world during night while keeping HUD readable.
+            dark_overlay = pygame.Surface((LOW_RES_WIDTH, LOW_RES_HEIGHT), pygame.SRCALPHA)
+            dark_overlay.fill((0, 0, 18, 78))
+            self.world_surface.blit(dark_overlay, (0, 0))
+
         scaled = pygame.transform.smoothscale(self.world_surface, self.screen.get_size())
         self.screen.blit(scaled, (0, 0))
 
@@ -988,6 +1018,13 @@ class Game:
 
         seed_display = self.font_small.render(f"Seed: {self.seed_text}", True, (236, 240, 246))
         self.screen.blit(seed_display, (14, 12))
+
+        phase_name = "Day" if self.is_daytime() else "Night"
+        secs = int(self.time_until_phase_change())
+        mins = secs // 60
+        rem = secs % 60
+        phase_display = self.font_small.render(f"{phase_name} ({mins}:{rem:02d} to change)", True, (236, 240, 246))
+        self.screen.blit(phase_display, (14, 154))
 
         total_logs = self.count_item("wood")
         total_saplings = self.count_item("sapling")
