@@ -7,19 +7,21 @@ import pygame
 
 WIDTH = 1280
 HEIGHT = 720
-FPS = 60
+FPS = 64
 
 LOW_RES_WIDTH = 320
 LOW_RES_HEIGHT = 180
 
 FOV = math.radians(70)
 HORIZON = LOW_RES_HEIGHT // 2 - 8
-VIEW_DISTANCE = 220
+VIEW_DISTANCE = 115
 CAMERA_HEIGHT = 10.0
 TURN_SPEED = 1.8
 MOVE_SPEED = 22.0
 JUMP_VELOCITY = 12.5
 GRAVITY = 30.0
+TREE_COUNT = 120
+TREE_AREA_RADIUS = 220.0
 
 SKY_TOP = (110, 156, 209)
 SKY_BOTTOM = (181, 214, 238)
@@ -104,6 +106,7 @@ class Game:
         self.clock = pygame.time.Clock()
 
         self.world_surface = pygame.Surface((LOW_RES_WIDTH, LOW_RES_HEIGHT))
+        self.sky_surface = self.build_sky_surface()
 
         self.font_title = pygame.font.SysFont("georgia", 56, bold=True)
         self.font_ui = pygame.font.SysFont("consolas", 22)
@@ -125,20 +128,26 @@ class Game:
         self.active_slot = 0
         self.inventory_slots = [None] * 8
         self.armor_slots = [None] * 4
+        self.logs = 0
+        self.saplings = 0
+        self.trees = []
+        self.action_message = ""
+        self.action_message_timer = 0.0
 
         self.terrain = SeededTerrain(self.generate_seed())
+        self.generate_trees()
 
     @staticmethod
     def generate_seed() -> str:
-        return "".join(str(random.randint(0, 9)) for _ in range(16))
+        return "".join(str(random.randint(0, 9)) for _ in range(8))
 
     def validate_seed(self, text: str) -> tuple[bool, str]:
         if text == "":
             return True, self.generate_seed()
         if not text.isdigit():
             return False, "Seed must be numeric"
-        if len(text) != 16:
-            return False, "Seed must be exactly 16 digits"
+        if len(text) != 8:
+            return False, "Seed must be exactly 8 digits"
         return True, text
 
     def start_game(self):
@@ -150,6 +159,7 @@ class Game:
         self.seed_text = result
         self.seed_error = ""
         self.terrain = SeededTerrain(self.seed_text)
+        self.generate_trees()
 
         self.player_x = 0.0
         self.player_z = 0.0
@@ -157,6 +167,10 @@ class Game:
         self.jump_offset = 0.0
         self.vertical_velocity = 0.0
         self.is_grounded = True
+        self.logs = 0
+        self.saplings = 0
+        self.action_message = ""
+        self.action_message_timer = 0.0
 
         self.mode = "play"
 
@@ -166,7 +180,7 @@ class Game:
                 self.start_game()
             elif event.key == pygame.K_BACKSPACE:
                 self.seed_text = self.seed_text[:-1]
-            elif event.unicode.isdigit() and len(self.seed_text) < 16:
+            elif event.unicode.isdigit() and len(self.seed_text) < 8:
                 self.seed_text += event.unicode
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             button_rect = self.start_button_rect()
@@ -180,6 +194,10 @@ class Game:
             elif event.key == pygame.K_SPACE and self.is_grounded:
                 self.vertical_velocity = JUMP_VELOCITY
                 self.is_grounded = False
+            elif event.key == pygame.K_f:
+                self.punch_tree()
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            self.punch_tree()
 
     def start_button_rect(self) -> pygame.Rect:
         w, h = self.screen.get_size()
@@ -214,7 +232,94 @@ class Game:
                 self.vertical_velocity = 0.0
                 self.is_grounded = True
 
-    def draw_sky(self):
+        if self.action_message_timer > 0.0:
+            self.action_message_timer = max(0.0, self.action_message_timer - dt)
+
+    def generate_trees(self):
+        rng = random.Random(self.terrain.seed_value ^ 0x6C8E9CF5)
+        trees = []
+
+        attempts = 0
+        max_attempts = TREE_COUNT * 6
+        while len(trees) < TREE_COUNT and attempts < max_attempts:
+            attempts += 1
+            tx = rng.uniform(-TREE_AREA_RADIUS, TREE_AREA_RADIUS)
+            tz = rng.uniform(-TREE_AREA_RADIUS, TREE_AREA_RADIUS)
+
+            if tx * tx + tz * tz > TREE_AREA_RADIUS * TREE_AREA_RADIUS:
+                continue
+
+            if tx * tx + tz * tz < 18.0 * 18.0:
+                continue
+
+            nearby = False
+            for tree in trees:
+                dx = tree["x"] - tx
+                dz = tree["z"] - tz
+                if dx * dx + dz * dz < 7.0 * 7.0:
+                    nearby = True
+                    break
+            if nearby:
+                continue
+
+            trees.append(
+                {
+                    "x": tx,
+                    "z": tz,
+                    "trunk": rng.uniform(10.0, 15.0),
+                    "crown": rng.uniform(3.8, 5.8),
+                    "alive": True,
+                }
+            )
+
+        self.trees = trees
+
+    @staticmethod
+    def wrap_angle(angle: float) -> float:
+        while angle > math.pi:
+            angle -= math.tau
+        while angle < -math.pi:
+            angle += math.tau
+        return angle
+
+    def punch_tree(self):
+        best_tree = None
+        best_distance = 1e9
+
+        for tree in self.trees:
+            if not tree["alive"]:
+                continue
+
+            dx = tree["x"] - self.player_x
+            dz = tree["z"] - self.player_z
+            distance = math.hypot(dx, dz)
+            if distance > 10.0:
+                continue
+
+            target_angle = math.atan2(dx, dz)
+            rel_angle = self.wrap_angle(target_angle - self.player_yaw)
+            if abs(rel_angle) > math.radians(16):
+                continue
+
+            if distance < best_distance:
+                best_distance = distance
+                best_tree = tree
+
+        if best_tree is None:
+            self.action_message = "Punch missed"
+            self.action_message_timer = 1.0
+            return
+
+        best_tree["alive"] = False
+        logs = random.randint(1, 5)
+        saplings = random.randint(1, 3)
+        self.logs += logs
+        self.saplings += saplings
+        self.action_message = f"Collected {logs} logs and {saplings} saplings"
+        self.action_message_timer = 1.8
+
+    def build_sky_surface(self) -> pygame.Surface:
+        surface = pygame.Surface((LOW_RES_WIDTH, LOW_RES_HEIGHT))
         for y in range(LOW_RES_HEIGHT):
             t = y / max(1, LOW_RES_HEIGHT - 1)
             color = (
@@ -222,10 +327,11 @@ class Game:
                 int(SKY_TOP[1] + (SKY_BOTTOM[1] - SKY_TOP[1]) * t),
                 int(SKY_TOP[2] + (SKY_BOTTOM[2] - SKY_TOP[2]) * t),
             )
-            pygame.draw.line(self.world_surface, color, (0, y), (LOW_RES_WIDTH, y))
+            pygame.draw.line(surface, color, (0, y), (LOW_RES_WIDTH, y))
+        return surface
 
     def draw_terrain(self):
-        self.draw_sky()
+        self.world_surface.blit(self.sky_surface, (0, 0))
 
         for sx in range(LOW_RES_WIDTH):
             ray_angle = self.player_yaw + (sx / LOW_RES_WIDTH - 0.5) * FOV
@@ -249,6 +355,57 @@ class Game:
                     max_y = projected
 
                 distance += 1.1
+
+    def draw_trees(self):
+        current_camera_height = CAMERA_HEIGHT + self.jump_offset
+        visible_trees = []
+
+        for tree in self.trees:
+            if not tree["alive"]:
+                continue
+
+            dx = tree["x"] - self.player_x
+            dz = tree["z"] - self.player_z
+            distance = math.hypot(dx, dz)
+
+            if distance <= 2.0 or distance > VIEW_DISTANCE:
+                continue
+
+            angle = math.atan2(dx, dz)
+            rel_angle = self.wrap_angle(angle - self.player_yaw)
+            if abs(rel_angle) > FOV * 0.6:
+                continue
+
+            visible_trees.append((distance, rel_angle, tree))
+
+        visible_trees.sort(reverse=True, key=lambda item: item[0])
+
+        for distance, rel_angle, tree in visible_trees:
+            sx = int((rel_angle / FOV + 0.5) * LOW_RES_WIDTH)
+            if sx < -8 or sx > LOW_RES_WIDTH + 8:
+                continue
+
+            ground_h = self.terrain.height(tree["x"], tree["z"])
+            trunk_top_h = ground_h + tree["trunk"]
+            crown_top_h = trunk_top_h + tree["crown"]
+
+            trunk_bottom_y = HORIZON - int((ground_h - current_camera_height) * 85.0 / distance)
+            trunk_top_y = HORIZON - int((trunk_top_h - current_camera_height) * 85.0 / distance)
+            crown_top_y = HORIZON - int((crown_top_h - current_camera_height) * 85.0 / distance)
+
+            trunk_bottom_y = max(0, min(LOW_RES_HEIGHT - 1, trunk_bottom_y))
+            trunk_top_y = max(0, min(LOW_RES_HEIGHT - 1, trunk_top_y))
+            crown_top_y = max(0, min(LOW_RES_HEIGHT - 1, crown_top_y))
+
+            trunk_half_width = max(1, int(9.0 / distance))
+            for x in range(sx - trunk_half_width, sx + trunk_half_width + 1):
+                if 0 <= x < LOW_RES_WIDTH and trunk_top_y < trunk_bottom_y:
+                    pygame.draw.line(self.world_surface, (98, 63, 42), (x, trunk_top_y), (x, trunk_bottom_y))
+
+            crown_radius = max(2, int(18.0 / distance))
+            crown_center_y = min(LOW_RES_HEIGHT - 1, trunk_top_y)
+            pygame.draw.circle(self.world_surface, (56, 131, 54), (sx, crown_center_y), crown_radius)
+            pygame.draw.circle(self.world_surface, (66, 150, 61), (sx, max(0, crown_top_y)), max(1, crown_radius - 1))
 
     def draw_crosshair(self):
         w, h = self.screen.get_size()
@@ -299,7 +456,7 @@ class Game:
         title = self.font_title.render("Legend of the Knight", True, (238, 240, 245))
         self.screen.blit(title, (w // 2 - title.get_width() // 2, h // 2 - 180))
 
-        subtitle = self.font_ui.render("Enter a 16-digit seed (optional)", True, (206, 214, 227))
+        subtitle = self.font_ui.render("Enter an 8-digit seed (optional)", True, (206, 214, 227))
         self.screen.blit(subtitle, (w // 2 - subtitle.get_width() // 2, h // 2 - 120))
 
         input_rect = pygame.Rect(w // 2 - 170, h // 2 - 70, 340, 54)
@@ -325,6 +482,7 @@ class Game:
 
     def draw_play_mode(self):
         self.draw_terrain()
+        self.draw_trees()
 
         scaled = pygame.transform.smoothscale(self.world_surface, self.screen.get_size())
         self.screen.blit(scaled, (0, 0))
@@ -334,6 +492,17 @@ class Game:
 
         seed_display = self.font_small.render(f"Seed: {self.seed_text}", True, (236, 240, 246))
         self.screen.blit(seed_display, (14, 12))
+
+        loot_display = self.font_small.render(f"Logs: {self.logs}  Saplings: {self.saplings}", True, (236, 240, 246))
+        self.screen.blit(loot_display, (14, 34))
+
+        punch_hint = self.font_small.render("Punch: Left Click or F", True, (236, 240, 246))
+        self.screen.blit(punch_hint, (14, 56))
+
+        if self.action_message_timer > 0.0:
+            msg = self.font_small.render(self.action_message, True, (249, 227, 128))
+            w, _ = self.screen.get_size()
+            self.screen.blit(msg, (w // 2 - msg.get_width() // 2, 14))
 
     def run(self):
         while self.running:
