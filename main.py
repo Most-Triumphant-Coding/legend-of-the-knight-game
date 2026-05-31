@@ -18,6 +18,8 @@ VIEW_DISTANCE = 220
 CAMERA_HEIGHT = 10.0
 TURN_SPEED = 1.8
 MOVE_SPEED = 22.0
+JUMP_VELOCITY = 12.5
+GRAVITY = 30.0
 
 SKY_TOP = (110, 156, 209)
 SKY_BOTTOM = (181, 214, 238)
@@ -116,6 +118,9 @@ class Game:
         self.player_x = 0.0
         self.player_z = 0.0
         self.player_yaw = 0.0
+        self.jump_offset = 0.0
+        self.vertical_velocity = 0.0
+        self.is_grounded = True
 
         self.active_slot = 0
         self.inventory_slots = [None] * 8
@@ -149,6 +154,9 @@ class Game:
         self.player_x = 0.0
         self.player_z = 0.0
         self.player_yaw = 0.0
+        self.jump_offset = 0.0
+        self.vertical_velocity = 0.0
+        self.is_grounded = True
 
         self.mode = "play"
 
@@ -169,6 +177,9 @@ class Game:
         if event.type == pygame.KEYDOWN:
             if pygame.K_1 <= event.key <= pygame.K_8:
                 self.active_slot = event.key - pygame.K_1
+            elif event.key == pygame.K_SPACE and self.is_grounded:
+                self.vertical_velocity = JUMP_VELOCITY
+                self.is_grounded = False
 
     def start_button_rect(self) -> pygame.Rect:
         w, h = self.screen.get_size()
@@ -193,6 +204,15 @@ class Game:
 
         self.player_x += forward_x * move * MOVE_SPEED * dt
         self.player_z += forward_z * move * MOVE_SPEED * dt
+
+        if not self.is_grounded:
+            self.jump_offset += self.vertical_velocity * dt
+            self.vertical_velocity -= GRAVITY * dt
+
+            if self.jump_offset <= 0.0:
+                self.jump_offset = 0.0
+                self.vertical_velocity = 0.0
+                self.is_grounded = True
 
     def draw_sky(self):
         for y in range(LOW_RES_HEIGHT):
@@ -219,7 +239,8 @@ class Game:
                 wz = self.player_z + dz * distance
 
                 ground_h = self.terrain.height(wx, wz)
-                projected = HORIZON - int((ground_h - CAMERA_HEIGHT) * 85.0 / distance)
+                current_camera_height = CAMERA_HEIGHT + self.jump_offset
+                projected = HORIZON - int((ground_h - current_camera_height) * 85.0 / distance)
                 projected = max(0, min(LOW_RES_HEIGHT - 1, projected))
 
                 if projected < max_y:
