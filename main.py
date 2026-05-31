@@ -18,7 +18,6 @@ HORIZON = LOW_RES_HEIGHT // 2 - 8
 VIEW_DISTANCE = 85
 CAMERA_HEIGHT = 10.0
 TURN_STEP_RADIANS = math.radians(1.0)
-TURN_STEP_INTERVAL = 1.0 / 16.0
 MOVE_SPEED = 22.0
 JUMP_VELOCITY = 12.5
 GRAVITY = 30.0
@@ -146,8 +145,6 @@ class Game:
         self.jump_offset = 0.0
         self.vertical_velocity = 0.0
         self.is_grounded = True
-        self.turn_hold_a = 0.0
-        self.turn_hold_d = 0.0
         self.max_health = MAX_HEALTH
         self.health = self.max_health
 
@@ -210,8 +207,6 @@ class Game:
         self.jump_offset = 0.0
         self.vertical_velocity = 0.0
         self.is_grounded = True
-        self.turn_hold_a = 0.0
-        self.turn_hold_d = 0.0
         self.health = self.max_health
         self.game_time_seconds = 0.0
         self.inventory_slots = [None] * 8
@@ -304,22 +299,10 @@ class Game:
         keys = pygame.key.get_pressed()
 
         if keys[pygame.K_a]:
-            self.turn_hold_a += dt
-            steps = int(self.turn_hold_a / TURN_STEP_INTERVAL)
-            if steps > 0:
-                self.player_yaw -= TURN_STEP_RADIANS * steps
-                self.turn_hold_a -= TURN_STEP_INTERVAL * steps
-        else:
-            self.turn_hold_a = 0.0
+            self.player_yaw -= TURN_STEP_RADIANS
 
         if keys[pygame.K_d]:
-            self.turn_hold_d += dt
-            steps = int(self.turn_hold_d / TURN_STEP_INTERVAL)
-            if steps > 0:
-                self.player_yaw += TURN_STEP_RADIANS * steps
-                self.turn_hold_d -= TURN_STEP_INTERVAL * steps
-        else:
-            self.turn_hold_d = 0.0
+            self.player_yaw += TURN_STEP_RADIANS
 
         forward_x = math.sin(self.player_yaw)
         forward_z = math.cos(self.player_yaw)
