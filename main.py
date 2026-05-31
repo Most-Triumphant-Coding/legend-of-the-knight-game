@@ -171,6 +171,7 @@ class Game:
         self.action_message = ""
         self.action_message_timer = 0.0
         self.crafting_open = False
+        self.crafting_selection = ""
 
         self.terrain = SeededTerrain(self.generate_seed())
         self.player_ground_height = self.terrain.height(self.player_x, self.player_z)
@@ -219,6 +220,7 @@ class Game:
         self.action_message = ""
         self.action_message_timer = 0.0
         self.crafting_open = False
+        self.crafting_selection = ""
         self.start_notice = ""
 
         self.mode = "play"
@@ -244,8 +246,10 @@ class Game:
             if event.key == pygame.K_r:
                 self.crafting_open = not self.crafting_open
                 if self.crafting_open:
-                    self.action_message = "Crafting open: Enter/C planks, V sticks, X wooden axe, B bed"
+                    self.crafting_selection = ""
+                    self.action_message = "Crafting open: type recipe number 1-4, then press Enter"
                 else:
+                    self.crafting_selection = ""
                     self.action_message = "Crafting closed"
                 self.action_message_timer = 1.4
                 return
@@ -253,16 +257,25 @@ class Game:
             if self.crafting_open:
                 if event.key == pygame.K_ESCAPE:
                     self.crafting_open = False
+                    self.crafting_selection = ""
                     self.action_message = "Crafting closed"
                     self.action_message_timer = 1.0
-                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_c):
-                    self.craft_planks()
-                elif event.key == pygame.K_v:
-                    self.craft_sticks()
-                elif event.key == pygame.K_x:
-                    self.craft_wooden_axe()
-                elif event.key == pygame.K_b:
-                    self.craft_bed()
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.craft_selected_recipe()
+                elif event.key == pygame.K_BACKSPACE:
+                    self.crafting_selection = self.crafting_selection[:-1]
+                    if self.crafting_selection:
+                        self.action_message = f"Selected recipe {self.crafting_selection}"
+                    else:
+                        self.action_message = "Selection cleared"
+                    self.action_message_timer = 1.0
+                elif event.unicode.isdigit():
+                    if event.unicode in ("1", "2", "3", "4"):
+                        self.crafting_selection = event.unicode
+                        self.action_message = f"Selected recipe {self.crafting_selection}"
+                    else:
+                        self.action_message = "Recipe must be 1-4"
+                    self.action_message_timer = 1.0
                 return
 
             if pygame.K_1 <= event.key <= pygame.K_8:
@@ -544,6 +557,7 @@ class Game:
         self.mode = "start"
         self.start_notice = "You died. Press Start Game to respawn."
         self.crafting_open = False
+        self.crafting_selection = ""
         self.action_message = ""
         self.action_message_timer = 0.0
         self.skeletons = []
@@ -741,6 +755,23 @@ class Game:
 
         self.action_message = "Crafted 2 planks from 1 log"
         self.action_message_timer = 1.4
+
+    def craft_selected_recipe(self):
+        if self.crafting_selection == "1":
+            self.craft_planks()
+            return
+        if self.crafting_selection == "2":
+            self.craft_sticks()
+            return
+        if self.crafting_selection == "3":
+            self.craft_wooden_axe()
+            return
+        if self.crafting_selection == "4":
+            self.craft_bed()
+            return
+
+        self.action_message = "Choose recipe number 1-4, then press Enter"
+        self.action_message_timer = 1.2
 
     def craft_sticks(self):
         if self.count_item("planks") < 1:
@@ -1578,14 +1609,18 @@ class Game:
                 pygame.draw.rect(self.screen, (118, 131, 149), r, width=2, border_radius=7)
 
         recipe_text = self.font_small.render(
-            "Recipes: 1 Log->2 Planks | 1 Plank->5 Sticks | 3 Planks+2 Sticks->Axe | 2 Wool+2 Planks->Bed",
+            "1: 1 Log->2 Planks | 2: 1 Plank->5 Sticks | 3: 3 Planks+2 Sticks->Axe | 4: 2 Wool+2 Planks->Bed",
             True,
             (230, 234, 240),
         )
         self.screen.blit(recipe_text, (panel_rect.x + 16, panel_rect.y + 262))
 
-        hint_text = self.font_small.render("Enter/C: planks, V: sticks, X: axe, B: bed, R/Esc: close", True, (199, 209, 223))
+        hint_text = self.font_small.render("Type recipe number 1-4, Enter: craft, Backspace: clear, R/Esc: close", True, (199, 209, 223))
         self.screen.blit(hint_text, (panel_rect.x + 16, panel_rect.y + 286))
+
+        selected = self.crafting_selection if self.crafting_selection else "none"
+        selected_text = self.font_small.render(f"Selected recipe: {selected}", True, (223, 229, 238))
+        self.screen.blit(selected_text, (panel_rect.x + 16, panel_rect.y + 308))
 
         center_slot = pygame.Rect(grid_x + slot_size + gap, grid_y + slot_size + gap, slot_size, slot_size)
         if self.count_item("wood") > 0:
@@ -1599,6 +1634,8 @@ class Game:
         planks_sprite = self.item_sprites.get("planks")
         if planks_sprite is not None:
             self.screen.blit(planks_sprite, (result_rect.x + 21, result_rect.y + 21))
+        num_1 = self.font_small.render("1", True, (236, 240, 246))
+        self.screen.blit(num_1, (result_rect.x + 4, result_rect.y + 2))
 
         stick_result_rect = pygame.Rect(panel_rect.right - 186, panel_rect.y + 146, 72, 72)
         pygame.draw.rect(self.screen, (35, 47, 61), stick_result_rect, border_radius=7)
@@ -1606,6 +1643,8 @@ class Game:
         sticks_sprite = self.item_sprites.get("sticks")
         if sticks_sprite is not None:
             self.screen.blit(sticks_sprite, (stick_result_rect.x + 21, stick_result_rect.y + 21))
+        num_2 = self.font_small.render("2", True, (236, 240, 246))
+        self.screen.blit(num_2, (stick_result_rect.x + 4, stick_result_rect.y + 2))
 
         axe_result_rect = pygame.Rect(panel_rect.right - 276, panel_rect.y + 146, 72, 72)
         pygame.draw.rect(self.screen, (35, 47, 61), axe_result_rect, border_radius=7)
@@ -1613,6 +1652,8 @@ class Game:
         axe_sprite = self.item_sprites.get("wooden_axe")
         if axe_sprite is not None:
             self.screen.blit(axe_sprite, (axe_result_rect.x + 21, axe_result_rect.y + 21))
+        num_3 = self.font_small.render("3", True, (236, 240, 246))
+        self.screen.blit(num_3, (axe_result_rect.x + 4, axe_result_rect.y + 2))
 
         bed_result_rect = pygame.Rect(panel_rect.right - 366, panel_rect.y + 146, 72, 72)
         pygame.draw.rect(self.screen, (35, 47, 61), bed_result_rect, border_radius=7)
@@ -1620,6 +1661,8 @@ class Game:
         bed_sprite = self.item_sprites.get("bed")
         if bed_sprite is not None:
             self.screen.blit(bed_sprite, (bed_result_rect.x + 21, bed_result_rect.y + 21))
+        num_4 = self.font_small.render("4", True, (236, 240, 246))
+        self.screen.blit(num_4, (bed_result_rect.x + 4, bed_result_rect.y + 2))
 
         arrow_start = (center_slot.right + 8, center_slot.centery)
         arrow_end = (result_rect.x - 8, result_rect.centery)
